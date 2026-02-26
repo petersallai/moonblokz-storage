@@ -129,13 +129,19 @@ mod tests {
     #[test]
     fn read_reports_absent_for_valid_empty_slot() {
         let backend = MemoryBackend::<2>::new();
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
     }
 
     #[test]
     fn read_reports_invalid_index_for_out_of_range_slot() {
         let backend = MemoryBackend::<2>::new();
-        assert!(matches!(backend.read_block(2), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(2),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 
     #[test]
@@ -160,7 +166,10 @@ mod tests {
 
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.init().is_ok());
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
     }
 
     #[test]
@@ -231,9 +240,15 @@ mod tests {
         assert!(backend.save_block(1, &block).is_ok());
         assert!(backend.save_block(3, &block).is_ok());
 
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
         assert!(matches!(backend.read_block(1), Ok(_)));
-        assert!(matches!(backend.read_block(2), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(2),
+            Err(StorageError::BlockAbsent)
+        ));
         assert!(matches!(backend.read_block(3), Ok(_)));
         assert!(matches!(
             backend.read_block(4),
@@ -248,8 +263,14 @@ mod tests {
         let block_b = block_from_len_and_marker(HEADER_SIZE + 3, 9);
 
         // Startup-style initial query on empty storage.
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
-        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
+        assert!(matches!(
+            backend.read_block(1),
+            Err(StorageError::BlockAbsent)
+        ));
 
         // Ingest-style writes.
         assert!(backend.save_block(0, &block_a).is_ok());
@@ -272,11 +293,17 @@ mod tests {
         assert_eq!(read_b.as_bytes(), block_b.as_bytes());
 
         // Negative-path query outcomes remain typed and deterministic.
-        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(1),
+            Err(StorageError::BlockAbsent)
+        ));
         assert!(matches!(
             backend.save_block(4, &block_a),
             Err(StorageError::InvalidIndex)
         ));
-        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(4),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 }
