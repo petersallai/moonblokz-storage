@@ -1,0 +1,12 @@
+[package]
+name = "moonblokz-storage"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["backend-memory"]
+backend-memory = []
+backend-rp2040 = []
+
+[dependencies]
+moonblokz-chain-types = { path = "../moonblokz-chain-types" }
