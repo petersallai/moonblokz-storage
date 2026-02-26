@@ -102,6 +102,12 @@ mod tests {
     }
 
     #[test]
+    fn read_reports_invalid_index_for_out_of_range_slot() {
+        let backend = MemoryBackend::<2>::new();
+        assert!(matches!(backend.read_block(2), Err(StorageError::InvalidIndex)));
+    }
+
+    #[test]
     fn save_and_read_round_trip() {
         let mut backend = MemoryBackend::<2>::new();
         let block_result = Block::from_bytes(&[0u8; HEADER_SIZE]);
