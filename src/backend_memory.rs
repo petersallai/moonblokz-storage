@@ -240,4 +240,43 @@ mod tests {
             Err(StorageError::InvalidIndex)
         ));
     }
+
+    #[test]
+    fn ingest_query_integration_flow_covers_positive_and_negative_paths() {
+        let mut backend = MemoryBackend::<4>::new();
+        let block_a = block_from_len_and_marker(HEADER_SIZE, 8);
+        let block_b = block_from_len_and_marker(HEADER_SIZE + 3, 9);
+
+        // Startup-style initial query on empty storage.
+        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+
+        // Ingest-style writes.
+        assert!(backend.save_block(0, &block_a).is_ok());
+        assert!(backend.save_block(2, &block_b).is_ok());
+
+        // Query-style reads.
+        let read_a = backend.read_block(0);
+        let read_b = backend.read_block(2);
+        assert!(read_a.is_ok());
+        assert!(read_b.is_ok());
+        let read_a = match read_a {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        let read_b = match read_b {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        assert_eq!(read_a.as_bytes(), block_a.as_bytes());
+        assert_eq!(read_b.as_bytes(), block_b.as_bytes());
+
+        // Negative-path query outcomes remain typed and deterministic.
+        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.save_block(4, &block_a),
+            Err(StorageError::InvalidIndex)
+        ));
+        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
+    }
 }
