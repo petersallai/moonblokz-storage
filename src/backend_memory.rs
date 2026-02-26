@@ -77,15 +77,21 @@ mod tests {
     use super::*;
     use moonblokz_chain_types::HEADER_SIZE;
 
+    fn block_from_len_and_marker(len: usize, marker: u8) -> Block {
+        let mut bytes = [0u8; HEADER_SIZE + 8];
+        bytes[0] = marker;
+        let parse_result = Block::from_bytes(&bytes[..len]);
+        assert!(parse_result.is_ok());
+        match parse_result {
+            Ok(value) => value,
+            Err(_) => unreachable!(),
+        }
+    }
+
     #[test]
     fn compile_time_block_storage_size_is_enforced() {
         let mut backend = MemoryBackend::<2>::new();
-        let block_result = Block::from_bytes(&[0u8; HEADER_SIZE]);
-        assert!(block_result.is_ok());
-        let block = match block_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let block = block_from_len_and_marker(HEADER_SIZE, 0);
 
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.save_block(1, &block).is_ok());
@@ -110,12 +116,7 @@ mod tests {
     #[test]
     fn save_and_read_round_trip() {
         let mut backend = MemoryBackend::<2>::new();
-        let block_result = Block::from_bytes(&[0u8; HEADER_SIZE]);
-        assert!(block_result.is_ok());
-        let block = match block_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let block = block_from_len_and_marker(HEADER_SIZE, 1);
 
         assert!(backend.save_block(0, &block).is_ok());
         let read_result = backend.read_block(0);
@@ -130,15 +131,55 @@ mod tests {
     #[test]
     fn init_resets_state_to_empty() {
         let mut backend = MemoryBackend::<2>::new();
-        let block_result = Block::from_bytes(&[0u8; HEADER_SIZE]);
-        assert!(block_result.is_ok());
-        let block = match block_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let block = block_from_len_and_marker(HEADER_SIZE, 2);
 
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.init().is_ok());
         assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+    }
+
+    #[test]
+    fn overwrite_same_index_is_deterministic() {
+        let mut backend = MemoryBackend::<2>::new();
+        let first = block_from_len_and_marker(HEADER_SIZE, 3);
+        let second = block_from_len_and_marker(HEADER_SIZE + 1, 4);
+
+        assert!(backend.save_block(0, &first).is_ok());
+        assert!(backend.save_block(0, &second).is_ok());
+
+        let read_result = backend.read_block(0);
+        assert!(read_result.is_ok());
+        let read_block = match read_result {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        assert_eq!(read_block.as_bytes(), second.as_bytes());
+    }
+
+    #[test]
+    fn multi_index_save_and_retrieve_returns_expected_blocks() {
+        let mut backend = MemoryBackend::<3>::new();
+        let block_a = block_from_len_and_marker(HEADER_SIZE, 5);
+        let block_b = block_from_len_and_marker(HEADER_SIZE + 2, 6);
+
+        assert!(backend.save_block(0, &block_a).is_ok());
+        assert!(backend.save_block(1, &block_b).is_ok());
+
+        let read_a = backend.read_block(0);
+        let read_b = backend.read_block(1);
+        assert!(read_a.is_ok());
+        assert!(read_b.is_ok());
+
+        let read_a = match read_a {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        let read_b = match read_b {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+
+        assert_eq!(read_a.as_bytes(), block_a.as_bytes());
+        assert_eq!(read_b.as_bytes(), block_b.as_bytes());
     }
 }
