@@ -4,6 +4,31 @@ use crate::{StorageError, StorageIndex, StorageTrait};
 use moonblokz_chain_types::Block;
 
 /// In-memory backend with compile-time block capacity.
+///
+/// Startup read-cycle example:
+/// ```
+/// use moonblokz_chain_types::{Block, HEADER_SIZE};
+/// use moonblokz_storage::{MemoryBackend, StorageError, StorageTrait};
+///
+/// let mut backend = MemoryBackend::<3>::new();
+/// let block_result = Block::from_bytes(&[0u8; HEADER_SIZE]);
+/// assert!(block_result.is_ok());
+/// let block = match block_result {
+///     Ok(value) => value,
+///     Err(_) => return,
+/// };
+/// assert!(backend.save_block(1, &block).is_ok());
+///
+/// for storage_index in 0u32..4u32 {
+///     match backend.read_block(storage_index) {
+///         Ok(_) => { /* populated slot */ }
+///         Err(StorageError::BlockAbsent) => { /* empty slot */ }
+///         Err(StorageError::InvalidIndex) => { /* out-of-range, stop or skip */ }
+///         Err(StorageError::IntegrityFailure) => { /* reserved for integrity stories */ }
+///         Err(StorageError::BackendIo { .. }) => { /* backend error */ }
+///     }
+/// }
+/// ```
 pub struct MemoryBackend<const BLOCK_STORAGE_SIZE: usize> {
     blocks: [Option<Block>; BLOCK_STORAGE_SIZE],
 }
@@ -139,6 +164,21 @@ mod tests {
     }
 
     #[test]
+    fn startup_read_cycle_over_empty_backend_is_deterministic() {
+        let backend = MemoryBackend::<3>::new();
+
+        for storage_index in 0u32..3u32 {
+            let result = backend.read_block(storage_index);
+            assert!(matches!(result, Err(StorageError::BlockAbsent)));
+        }
+
+        assert!(matches!(
+            backend.read_block(3),
+            Err(StorageError::InvalidIndex)
+        ));
+    }
+
+    #[test]
     fn overwrite_same_index_is_deterministic() {
         let mut backend = MemoryBackend::<2>::new();
         let first = block_from_len_and_marker(HEADER_SIZE, 3);
@@ -181,5 +221,23 @@ mod tests {
 
         assert_eq!(read_a.as_bytes(), block_a.as_bytes());
         assert_eq!(read_b.as_bytes(), block_b.as_bytes());
+    }
+
+    #[test]
+    fn startup_read_cycle_with_mixed_slots_returns_typed_outcomes() {
+        let mut backend = MemoryBackend::<4>::new();
+        let block = block_from_len_and_marker(HEADER_SIZE + 1, 7);
+
+        assert!(backend.save_block(1, &block).is_ok());
+        assert!(backend.save_block(3, &block).is_ok());
+
+        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(backend.read_block(1), Ok(_)));
+        assert!(matches!(backend.read_block(2), Err(StorageError::BlockAbsent)));
+        assert!(matches!(backend.read_block(3), Ok(_)));
+        assert!(matches!(
+            backend.read_block(4),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 }
