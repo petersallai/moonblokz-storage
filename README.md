@@ -2,6 +2,42 @@
 
 MoonBlokz storage contract crate for embedded `no_std` environments.
 
+## Integration and Distribution
+
+Current recommended integration model is Git dependency. Future crates.io
+release model is documented below for later phase adoption.
+
+### Current: Git Dependencies
+
+`moonblokz-storage`:
+
+```toml
+[dependencies]
+moonblokz-storage = { git = "https://github.com/petersallai/moonblokz-storage", default-features = false, features = ["backend-memory"] }
+```
+
+`moonblokz-chain-types`:
+
+```toml
+[dependencies]
+moonblokz-chain-types = { git = "https://github.com/petersallai/moonblokz-chain-types" }
+```
+
+### Future: crates.io Dependencies
+
+After crates.io publication, dependency wiring should switch to versioned crates:
+
+```toml
+[dependencies]
+moonblokz-storage = { version = "0.1", default-features = false, features = ["backend-memory"] }
+moonblokz-chain-types = "0.1"
+```
+
+Release expectations for crates.io phase:
+- Keep backend feature exclusivity behavior unchanged.
+- Keep `no_std` compatibility unchanged.
+- Publish semver-compatible updates with changelog notes for API/contract changes.
+
 ## Backend Feature Selection
 
 Exactly one backend feature must be enabled at compile time:

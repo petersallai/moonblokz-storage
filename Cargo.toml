@@ -2,6 +2,12 @@
 name = "moonblokz-storage"
 version = "0.1.0"
 edition = "2024"
+description = "MoonBlokz no_std storage contract and backend implementations for embedded blockchain nodes."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/petersallai/moonblokz-storage"
+keywords = ["embedded", "no-std", "blockchain", "rp2040", "storage"]
+categories = ["embedded", "no-std"]
 
 [features]
 default = ["backend-memory"]
