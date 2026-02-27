@@ -6,6 +6,8 @@ public API contracts are added incrementally by stories.
 
 #![no_std]
 
+#[cfg(test)]
+mod conformance;
 pub mod error;
 pub mod types;
 
@@ -26,6 +28,10 @@ use moonblokz_chain_types::Block;
 pub use backend_memory::MemoryBackend;
 #[cfg(feature = "backend-rp2040")]
 pub use backend_rp2040::Rp2040Backend;
+#[cfg(feature = "backend-memory")]
+pub type MoonblokzStorage<const STORAGE_SIZE: usize> = MemoryBackend<STORAGE_SIZE>;
+#[cfg(feature = "backend-rp2040")]
+pub type MoonblokzStorage<const STORAGE_SIZE: usize> = Rp2040Backend<STORAGE_SIZE>;
 pub use error::StorageError;
 pub use types::StorageIndex;
 
@@ -83,7 +89,9 @@ pub trait StorageTrait {
     /// }
     ///
     /// let mut storage = DummyStorage;
-    /// let block_result = moonblokz_chain_types::Block::from_bytes(&[0u8; moonblokz_chain_types::HEADER_SIZE]);
+    /// let mut bytes = [0u8; moonblokz_chain_types::HEADER_SIZE];
+    /// bytes[0] = 1;
+    /// let block_result = moonblokz_chain_types::Block::from_bytes(&bytes);
     /// assert!(block_result.is_ok());
     /// let block = match block_result {
     ///     Ok(value) => value,

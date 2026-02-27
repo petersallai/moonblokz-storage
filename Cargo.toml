@@ -10,3 +10,6 @@ backend-rp2040 = []
 
 [dependencies]
 moonblokz-chain-types = { path = "../moonblokz-chain-types" }
+
+[target.'cfg(target_arch = "arm")'.dependencies]
+embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }
