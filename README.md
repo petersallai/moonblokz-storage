@@ -111,6 +111,38 @@ persistence/retrieval, and control-plane management:
 - `init_params: [u8; INIT_PARAMS_SIZE]`
 - `chain_configuration: Option<Block>`
 
+## Example Projects
+
+Two standalone example projects are available under `examples/`:
+
+- `examples/moonblokz-storage-std-example`: host (`std`) flow example.
+- `examples/moonblokz-storage-embedded-example`: RP2040 embedded flow example.
+
+Shared behavior contract in both examples:
+- Check initialization status via `load_control_data()`.
+- If uninitialized, call `init(...)`.
+- Save a block and read it back from indexed storage.
+
+Embedded LED signaling behavior:
+- Success: one blink for 0.5 seconds.
+- Failure: three blinks.
+
+### Build/Run Commands
+
+`std` example:
+
+```sh
+cd examples/moonblokz-storage-std-example
+cargo run
+```
+
+RP2040 embedded example (build):
+
+```sh
+cd examples/moonblokz-storage-embedded-example
+cargo build --target thumbv6m-none-eabi
+```
+
 ## Memory Backend Capacity Rule
 
 For `backend-memory`, `STORAGE_SIZE` is interpreted as total storage bytes.

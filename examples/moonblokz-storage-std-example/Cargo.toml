@@ -1,0 +1,9 @@
+[package]
+name = "moonblokz-storage-std-example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+moonblokz-storage = { path = "../../", default-features = false, features = ["backend-memory"] }
+moonblokz-chain-types = { path = "../../../moonblokz-chain-types" }
+moonblokz-crypto = { path = "../../../moonblokz-crypto-lib", default-features = false, features = ["bls-bls12_381-bls"] }

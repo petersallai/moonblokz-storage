@@ -9,11 +9,11 @@ use moonblokz_chain_types::{Block, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 #[cfg(all(not(test), target_arch = "arm"))]
-use embassy_rp::Peripheral;
-#[cfg(all(not(test), target_arch = "arm"))]
 use embassy_rp::flash::{Blocking, Flash};
 #[cfg(all(not(test), target_arch = "arm"))]
 use embassy_rp::peripherals::FLASH;
+#[cfg(all(not(test), target_arch = "arm"))]
+use embassy_rp::Peri;
 
 /// RP2040 flash page size in bytes.
 pub const FLASH_PAGE_SIZE: usize = 4096;
@@ -125,7 +125,7 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     /// ```
     #[cfg(all(not(test), target_arch = "arm"))]
     pub fn new(
-        flash_peripheral: impl Peripheral<P = FLASH> + 'static,
+        flash_peripheral: Peri<'static, FLASH>,
         data_storage_start_address: usize,
     ) -> Result<Self, StorageError> {
         Self::validate_page_aligned_start_address(data_storage_start_address)?;

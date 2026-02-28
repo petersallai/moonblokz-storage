@@ -16,7 +16,7 @@ backend-rp2040 = []
 
 [dependencies]
 moonblokz-chain-types = { path = "../moonblokz-chain-types" }
-moonblokz-crypto = { path = "../moonblokz-crypto-lib" }
+moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false, features = ["bls-bls12_381-bls"] }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }
