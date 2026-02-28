@@ -38,6 +38,10 @@ Release expectations for crates.io phase:
 - Keep `no_std` compatibility unchanged.
 - Publish semver-compatible updates with changelog notes for API/contract changes.
 
+## Developer Guides
+
+- `docs/add-new-device-support.md`: checklist and workflow for adding a new backend feature while preserving storage contract semantics.
+
 ## Backend Feature Selection
 
 Exactly one backend feature must be enabled at compile time:

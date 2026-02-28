@@ -29,8 +29,32 @@ pub use backend_memory::MemoryBackend;
 #[cfg(feature = "backend-rp2040")]
 pub use backend_rp2040::Rp2040Backend;
 #[cfg(feature = "backend-memory")]
+/// Canonical storage backend alias for the selected `backend-memory` feature.
+///
+/// Parameters:
+/// - `STORAGE_SIZE`: total storage bytes used by the memory backend.
+///
+/// Example:
+/// ```
+/// use moonblokz_chain_types::MAX_BLOCK_SIZE;
+/// use moonblokz_storage::MoonblokzStorage;
+///
+/// let _storage = MoonblokzStorage::<{ 4 * MAX_BLOCK_SIZE }>::new();
+/// ```
 pub type MoonblokzStorage<const STORAGE_SIZE: usize> = MemoryBackend<STORAGE_SIZE>;
 #[cfg(feature = "backend-rp2040")]
+/// Canonical storage backend alias for the selected `backend-rp2040` feature.
+///
+/// Parameters:
+/// - `STORAGE_SIZE`: total RP2040 flash size in bytes used for geometry calculations.
+///
+/// Example:
+/// ```ignore
+/// use moonblokz_storage::MoonblokzStorage;
+///
+/// let storage = MoonblokzStorage::<{ 2 * 1024 * 1024 }>::new_for_tests(0);
+/// let _use_storage = storage;
+/// ```
 pub type MoonblokzStorage<const STORAGE_SIZE: usize> = Rp2040Backend<STORAGE_SIZE>;
 pub use error::StorageError;
 pub use types::StorageIndex;
