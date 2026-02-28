@@ -15,8 +15,8 @@ backend-memory = []
 backend-rp2040 = []
 
 [dependencies]
-moonblokz-chain-types = { path = "../moonblokz-chain-types" }
-moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false, features = ["bls-bls12_381-bls"] }
+moonblokz-chain-types = { git = "https://github.com/petersallai/moonblokz-chain-types" }
+moonblokz-crypto = { git = "https://github.com/petersallai/moonblokz-crypto-lib", default-features = false, features = ["schnorr-crypto-bigint"] }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }

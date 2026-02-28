@@ -18,7 +18,7 @@ embassy-rp = { version = "0.8", features = ["unstable-pac", "time-driver", "crit
 embedded-alloc = "0.6"
 moonblokz-storage = { path = "../../", default-features = false, features = ["backend-rp2040"] }
 moonblokz-chain-types = { path = "../../../moonblokz-chain-types" }
-moonblokz-crypto = { path = "../../../moonblokz-crypto-lib", default-features = false, features = ["bls-bls12_381-bls"] }
+moonblokz-crypto = { path = "../../../moonblokz-crypto-lib", default-features = false, features = ["schnorr-crypto-bigint"] }
 
 [profile.release]
 lto = true

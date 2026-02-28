@@ -12,23 +12,16 @@ Behavior:
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
-use core::mem::MaybeUninit;
-use embedded_alloc::LlffHeap as Heap;
+use cortex_m_rt::entry;
 use embassy_rp::gpio::{Level, Output};
 use moonblokz_chain_types::{Block, BlockBuilder, BlockHeader};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 use moonblokz_storage::{INIT_PARAMS_SIZE, Rp2040Backend, StorageError, StorageTrait};
 use panic_halt as _;
-use cortex_m_rt::entry;
 
 const RP2040_FLASH_SIZE: usize = 2 * 1024 * 1024;
 const DATA_STORAGE_START_ADDRESS: usize = 1536 * 1024;
 const EXAMPLE_STORAGE_INDEX: u32 = 0;
-
-#[global_allocator]
-static HEAP: Heap = Heap::empty();
 
 fn make_example_block() -> Result<Block, StorageError> {
     let header = BlockHeader {
@@ -56,11 +49,7 @@ fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
     match storage.load_control_data() {
         Ok(_) => {}
         Err(StorageError::ControlPlaneUninitialized) => {
-            storage.init(
-                [7u8; PRIVATE_KEY_SIZE],
-                1001,
-                [9u8; INIT_PARAMS_SIZE],
-            )?;
+            storage.init([7u8; PRIVATE_KEY_SIZE], 1001, [9u8; INIT_PARAMS_SIZE])?;
         }
         Err(err) => return Err(err),
     }
@@ -70,12 +59,10 @@ fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
     let loaded = storage.read_block(EXAMPLE_STORAGE_INDEX)?;
     let expected = block.header();
     let actual = loaded.header();
-    Ok(
-        expected.version == actual.version
-            && expected.sequence == actual.sequence
-            && expected.creator == actual.creator
-            && expected.payload_type == actual.payload_type,
-    )
+    Ok(expected.version == actual.version
+        && expected.sequence == actual.sequence
+        && expected.creator == actual.creator
+        && expected.payload_type == actual.payload_type)
 }
 
 fn delay_ms(ms: u32) {
@@ -87,16 +74,10 @@ fn delay_ms(ms: u32) {
 
 #[entry]
 fn main() -> ! {
-    static mut HEAP_MEM: [MaybeUninit<u8>; 16 * 1024] = [MaybeUninit::uninit(); 16 * 1024];
-    unsafe {
-        HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_MEM.len());
-    }
-
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
 
-    let result = match Rp2040Backend::<RP2040_FLASH_SIZE>::new(p.FLASH, DATA_STORAGE_START_ADDRESS)
-    {
+    let result = match Rp2040Backend::<RP2040_FLASH_SIZE>::new(p.FLASH, DATA_STORAGE_START_ADDRESS) {
         Ok(mut storage) => run_flow(&mut storage),
         Err(err) => Err(err),
     };
