@@ -28,7 +28,7 @@ use moonblokz_chain_types::Block;
 pub use backend_memory::MemoryBackend;
 #[cfg(feature = "backend-rp2040")]
 pub use backend_rp2040::Rp2040Backend;
-#[cfg(feature = "backend-memory")]
+#[cfg(all(feature = "backend-memory", not(feature = "backend-rp2040")))]
 /// Canonical storage backend alias for the selected `backend-memory` feature.
 ///
 /// Parameters:
@@ -42,7 +42,7 @@ pub use backend_rp2040::Rp2040Backend;
 /// let _storage = MoonblokzStorage::<{ 4 * MAX_BLOCK_SIZE }>::new();
 /// ```
 pub type MoonblokzStorage<const STORAGE_SIZE: usize> = MemoryBackend<STORAGE_SIZE>;
-#[cfg(feature = "backend-rp2040")]
+#[cfg(all(feature = "backend-rp2040", not(feature = "backend-memory")))]
 /// Canonical storage backend alias for the selected `backend-rp2040` feature.
 ///
 /// Parameters:
