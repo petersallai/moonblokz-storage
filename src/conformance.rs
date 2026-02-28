@@ -4,6 +4,7 @@
 mod tests {
     use crate::{MoonblokzStorage, StorageError, StorageTrait};
     use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
+    use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
     #[cfg(feature = "backend-memory")]
     const TEST_STORAGE_SIZE: usize = 8 * MAX_BLOCK_SIZE;
@@ -40,6 +41,13 @@ mod tests {
     #[test]
     fn conformance_save_read_round_trip_returns_exact_saved_block() {
         let mut storage = new_backend();
+        assert!(storage
+            .init(
+                [1u8; PRIVATE_KEY_SIZE],
+                1,
+                [0u8; crate::INIT_PARAMS_SIZE],
+            )
+            .is_ok());
         let block = block_from_marker(41);
         assert!(storage.save_block(0, &block).is_ok());
 
@@ -54,7 +62,14 @@ mod tests {
 
     #[test]
     fn conformance_empty_slot_reports_block_absent() {
-        let storage = new_backend();
+        let mut storage = new_backend();
+        assert!(storage
+            .init(
+                [1u8; PRIVATE_KEY_SIZE],
+                1,
+                [0u8; crate::INIT_PARAMS_SIZE],
+            )
+            .is_ok());
         assert!(matches!(
             storage.read_block(0),
             Err(StorageError::BlockAbsent)
@@ -64,6 +79,13 @@ mod tests {
     #[test]
     fn conformance_invalid_index_reports_invalid_index_for_read_and_save() {
         let mut storage = new_backend();
+        assert!(storage
+            .init(
+                [1u8; PRIVATE_KEY_SIZE],
+                1,
+                [0u8; crate::INIT_PARAMS_SIZE],
+            )
+            .is_ok());
         let block = block_from_marker(42);
 
         assert!(matches!(
@@ -79,6 +101,13 @@ mod tests {
     #[test]
     fn conformance_startup_scan_returns_typed_outcomes_for_mixed_slots() {
         let mut storage = new_backend();
+        assert!(storage
+            .init(
+                [1u8; PRIVATE_KEY_SIZE],
+                1,
+                [0u8; crate::INIT_PARAMS_SIZE],
+            )
+            .is_ok());
         let block_a = block_from_marker(43);
         let block_b = block_from_marker(44);
         assert!(storage.save_block(1, &block_a).is_ok());

@@ -1,8 +1,11 @@
 /*! RP2040 backend geometry mapping and synchronous flash save/retrieve paths. */
 
-use crate::{StorageError, StorageIndex, StorageTrait};
+use crate::{
+    ControlPlaneData, INIT_PARAMS_SIZE, StorageError, StorageIndex, StorageTrait,
+};
 use core::cell::RefCell;
 use moonblokz_chain_types::{Block, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
+use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 #[cfg(all(not(test), target_arch = "arm"))]
 use embassy_rp::Peripheral;
@@ -349,7 +352,12 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 }
 
 impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH_SIZE> {
-    fn init(&mut self) -> Result<(), StorageError> {
+    fn init(
+        &mut self,
+        _private_key: [u8; PRIVATE_KEY_SIZE],
+        _own_node_id: u32,
+        _init_params: [u8; INIT_PARAMS_SIZE],
+    ) -> Result<(), StorageError> {
         Ok(())
     }
 
@@ -373,6 +381,14 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
 
         let mapping = map_storage_index(storage_index);
         self.read_slot(&mapping)
+    }
+
+    fn set_chain_configuration(&mut self, _block: &Block) -> Result<(), StorageError> {
+        Err(StorageError::BackendIo { code: 213 })
+    }
+
+    fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
+        Err(StorageError::BackendIo { code: 213 })
     }
 }
 

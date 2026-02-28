@@ -23,6 +23,7 @@ compile_error!("Exactly one backend feature must be enabled: backend-memory or b
 compile_error!("Exactly one backend feature must be enabled: backend-memory or backend-rp2040.");
 
 use moonblokz_chain_types::Block;
+use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 #[cfg(feature = "backend-memory")]
 pub use backend_memory::MemoryBackend;
@@ -59,12 +60,35 @@ pub type MoonblokzStorage<const STORAGE_SIZE: usize> = Rp2040Backend<STORAGE_SIZ
 pub use error::StorageError;
 pub use types::StorageIndex;
 
+/// Initialization parameter byte size.
+pub const INIT_PARAMS_SIZE: usize = 100;
+/// Number of replicated control-plane entries.
+pub const CONTROL_PLANE_COUNT: usize = 3;
+/// Storage-library control-plane schema version.
+pub const CONTROL_PLANE_VERSION: u8 = 1;
+
+/// Canonical control-plane data returned by `load_control_data`.
+pub struct ControlPlaneData {
+    /// Persisted schema version.
+    pub version: u8,
+    /// Persisted private key.
+    pub private_key: [u8; PRIVATE_KEY_SIZE],
+    /// Persisted own node id.
+    pub own_node_id: u32,
+    /// Persisted free-form init parameters.
+    pub init_params: [u8; INIT_PARAMS_SIZE],
+    /// Optional chain-configuration block.
+    pub chain_configuration: Option<Block>,
+}
+
 /// Synchronous, `no_std` storage API contract for MoonBlokz chain logic.
 pub trait StorageTrait {
     /// Initializes backend storage state.
     ///
     /// Parameters:
-    /// - none.
+    /// - `private_key`: node private key bytes.
+    /// - `own_node_id`: local node identifier.
+    /// - `init_params`: free-form control-plane initialization bytes.
     ///
     /// Example:
     /// ```
@@ -73,19 +97,39 @@ pub trait StorageTrait {
     /// struct DummyStorage;
     ///
     /// impl StorageTrait for DummyStorage {
-    ///     fn init(&mut self) -> Result<(), StorageError> { Ok(()) }
+    ///     fn init(
+    ///         &mut self,
+    ///         _private_key: [u8; moonblokz_crypto::PRIVATE_KEY_SIZE],
+    ///         _own_node_id: u32,
+    ///         _init_params: [u8; moonblokz_storage::INIT_PARAMS_SIZE],
+    ///     ) -> Result<(), StorageError> { Ok(()) }
     ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
+    ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
+    ///         Ok(())
+    ///     }
+    ///     fn load_control_data(&mut self) -> Result<moonblokz_storage::ControlPlaneData, StorageError> {
+    ///         Err(StorageError::ControlPlaneUninitialized)
+    ///     }
     /// }
     ///
     /// let mut storage = DummyStorage;
-    /// assert!(storage.init().is_ok());
+    /// assert!(storage.init(
+    ///     [1u8; moonblokz_crypto::PRIVATE_KEY_SIZE],
+    ///     7,
+    ///     [0u8; moonblokz_storage::INIT_PARAMS_SIZE]
+    /// ).is_ok());
     /// ```
-    fn init(&mut self) -> Result<(), StorageError>;
+    fn init(
+        &mut self,
+        private_key: [u8; PRIVATE_KEY_SIZE],
+        own_node_id: u32,
+        init_params: [u8; INIT_PARAMS_SIZE],
+    ) -> Result<(), StorageError>;
 
     /// Persists a block at a specific `storage_index`.
     ///
@@ -100,7 +144,12 @@ pub trait StorageTrait {
     /// struct DummyStorage;
     ///
     /// impl StorageTrait for DummyStorage {
-    ///     fn init(&mut self) -> Result<(), StorageError> { Ok(()) }
+    ///     fn init(
+    ///         &mut self,
+    ///         _private_key: [u8; moonblokz_crypto::PRIVATE_KEY_SIZE],
+    ///         _own_node_id: u32,
+    ///         _init_params: [u8; moonblokz_storage::INIT_PARAMS_SIZE],
+    ///     ) -> Result<(), StorageError> { Ok(()) }
     ///     fn save_block(&mut self, storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         if storage_index != 0 {
     ///             return Err(StorageError::InvalidIndex);
@@ -109,6 +158,12 @@ pub trait StorageTrait {
     ///     }
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
+    ///     }
+    ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
+    ///         Ok(())
+    ///     }
+    ///     fn load_control_data(&mut self) -> Result<moonblokz_storage::ControlPlaneData, StorageError> {
+    ///         Err(StorageError::ControlPlaneUninitialized)
     ///     }
     /// }
     ///
@@ -141,12 +196,23 @@ pub trait StorageTrait {
     /// struct DummyStorage;
     ///
     /// impl StorageTrait for DummyStorage {
-    ///     fn init(&mut self) -> Result<(), StorageError> { Ok(()) }
+    ///     fn init(
+    ///         &mut self,
+    ///         _private_key: [u8; moonblokz_crypto::PRIVATE_KEY_SIZE],
+    ///         _own_node_id: u32,
+    ///         _init_params: [u8; moonblokz_storage::INIT_PARAMS_SIZE],
+    ///     ) -> Result<(), StorageError> { Ok(()) }
     ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
+    ///     }
+    ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
+    ///         Ok(())
+    ///     }
+    ///     fn load_control_data(&mut self) -> Result<moonblokz_storage::ControlPlaneData, StorageError> {
+    ///         Err(StorageError::ControlPlaneUninitialized)
     ///     }
     /// }
     ///
@@ -155,4 +221,16 @@ pub trait StorageTrait {
     /// assert!(matches!(result, Err(StorageError::BlockAbsent)));
     /// ```
     fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError>;
+
+    /// Persists the chain-configuration block once after initialization.
+    ///
+    /// Parameters:
+    /// - `block`: chain-configuration block to persist.
+    fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError>;
+
+    /// Loads control-plane data and performs best-effort replica repair.
+    ///
+    /// Parameters:
+    /// - none.
+    fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError>;
 }

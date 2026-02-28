@@ -8,6 +8,14 @@ pub enum StorageError {
     BlockAbsent,
     /// Retrieved data failed integrity verification.
     IntegrityFailure,
+    /// Control-plane data is not initialized.
+    ControlPlaneUninitialized,
+    /// Chain configuration block was already set.
+    ChainConfigurationAlreadySet,
+    /// Control-plane data failed CRC or structural validation.
+    ControlPlaneCorrupted,
+    /// Persisted control-plane constants are incompatible with current binary constants.
+    ControlPlaneIncompatible,
     /// Backend-level I/O failure while executing a storage operation.
     ///
     /// Canonical `code` mapping:
