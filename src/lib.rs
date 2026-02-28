@@ -53,7 +53,7 @@ pub type MoonblokzStorage<const STORAGE_SIZE: usize> = MemoryBackend<STORAGE_SIZ
 /// ```ignore
 /// use moonblokz_storage::MoonblokzStorage;
 ///
-/// let storage = MoonblokzStorage::<{ 2 * 1024 * 1024 }>::new_for_tests(0);
+/// let storage = MoonblokzStorage::<{ 2 * 1024 * 1024 }>::new_for_tests(0).unwrap();
 /// let _use_storage = storage;
 /// ```
 pub type MoonblokzStorage<const STORAGE_SIZE: usize> = Rp2040Backend<STORAGE_SIZE>;
@@ -69,8 +69,6 @@ pub const CONTROL_PLANE_VERSION: u8 = 1;
 
 /// Canonical control-plane data returned by `load_control_data`.
 pub struct ControlPlaneData {
-    /// Persisted schema version.
-    pub version: u8,
     /// Persisted private key.
     pub private_key: [u8; PRIVATE_KEY_SIZE],
     /// Persisted own node id.

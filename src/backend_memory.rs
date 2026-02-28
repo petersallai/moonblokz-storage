@@ -59,19 +59,13 @@ const CONTROL_PLANE_RESERVED_BYTES: usize = CONTROL_PLANE_COUNT * CONTROL_PLANE_
 ///         Err(StorageError::ChainConfigurationAlreadySet) => { /* not used in read */ }
 ///         Err(StorageError::ControlPlaneCorrupted) => { /* control-plane issue */ }
 ///         Err(StorageError::ControlPlaneIncompatible) => { /* control-plane incompatibility */ }
+///         Err(StorageError::InvalidConfiguration) => { /* backend configuration issue */ }
 ///         Err(StorageError::BackendIo { .. }) => { /* backend error */ }
 ///     }
 /// }
 /// ```
 pub struct MemoryBackend<const STORAGE_SIZE: usize> {
     storage: [u8; STORAGE_SIZE],
-}
-
-struct ControlPlaneRecord {
-    private_key: [u8; PRIVATE_KEY_SIZE],
-    own_node_id: u32,
-    init_params: [u8; INIT_PARAMS_SIZE],
-    chain_configuration: Option<[u8; MAX_BLOCK_SIZE]>,
 }
 
 impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
@@ -150,7 +144,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         !crc
     }
 
-    fn serialize_record(record: &ControlPlaneRecord) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
+    fn serialize_record(record: &ControlPlaneData) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
         let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
         out[VERSION_OFFSET] = CONTROL_PLANE_VERSION;
         out[PRIVATE_KEY_SIZE_OFFSET] = PRIVATE_KEY_SIZE as u8;
@@ -167,8 +161,8 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
             .copy_from_slice(&max_block_size_u16.to_le_bytes());
 
         if let Some(chain_configuration) = &record.chain_configuration {
-            out[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE]
-                .copy_from_slice(chain_configuration);
+            let bytes = chain_configuration.as_bytes();
+            out[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + bytes.len()].copy_from_slice(bytes);
         }
 
         let crc = Self::crc32(&out[..CONTROL_CRC32_OFFSET]);
@@ -178,7 +172,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
 
     fn deserialize_record(
         bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) -> Result<ControlPlaneRecord, StorageError> {
+    ) -> Result<ControlPlaneData, StorageError> {
         if bytes.iter().all(|value| *value == 0) {
             return Err(StorageError::ControlPlaneUninitialized);
         }
@@ -226,10 +220,10 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         } else {
             let mut value = [0u8; MAX_BLOCK_SIZE];
             value.copy_from_slice(&bytes[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE]);
-            Some(value)
+            Some(Block::from_bytes(&value).map_err(|_| StorageError::ControlPlaneCorrupted)?)
         };
 
-        Ok(ControlPlaneRecord {
+        Ok(ControlPlaneData {
             private_key,
             own_node_id,
             init_params,
@@ -237,9 +231,9 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         })
     }
 
-    fn load_primary_record_and_repair(&mut self) -> Result<ControlPlaneRecord, StorageError> {
+    fn load_primary_record_and_repair(&mut self) -> Result<ControlPlaneData, StorageError> {
         let mut first_valid_index: Option<usize> = None;
-        let mut first_valid_record: Option<ControlPlaneRecord> = None;
+        let mut first_valid_record: Option<ControlPlaneData> = None;
         let mut invalid_indexes = [usize::MAX; CONTROL_PLANE_COUNT];
         let mut invalid_len = 0usize;
         let mut saw_non_zero = false;
@@ -303,7 +297,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         Ok(record)
     }
 
-    fn write_record_to_all_replicas(&mut self, record: &ControlPlaneRecord) {
+    fn write_record_to_all_replicas(&mut self, record: &ControlPlaneData) {
         let encoded = Self::serialize_record(record);
         let mut index = 0usize;
         while index < CONTROL_PLANE_COUNT {
@@ -322,7 +316,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
     ) -> Result<(), StorageError> {
         self.storage.fill(0);
 
-        let record = ControlPlaneRecord {
+        let record = ControlPlaneData {
             private_key,
             own_node_id,
             init_params,
@@ -366,13 +360,8 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
             return Err(StorageError::ChainConfigurationAlreadySet);
         }
 
-        let mut encoded_block = [0u8; MAX_BLOCK_SIZE];
-        let block_bytes = block.as_bytes();
-        if block_bytes.len() > MAX_BLOCK_SIZE {
-            return Err(StorageError::BackendIo { code: 1 });
-        }
-        encoded_block[..block_bytes.len()].copy_from_slice(block_bytes);
-        record.chain_configuration = Some(encoded_block);
+        record.chain_configuration =
+            Some(Block::from_bytes(block.as_bytes()).map_err(|_| StorageError::BackendIo { code: 1 })?);
 
         self.write_record_to_all_replicas(&record);
         Ok(())
@@ -381,20 +370,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
     fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
         let record = self.load_primary_record_and_repair()?;
 
-        let chain_configuration = match record.chain_configuration {
-            Some(bytes) => {
-                Some(Block::from_bytes(&bytes).map_err(|_| StorageError::ControlPlaneCorrupted)?)
-            }
-            None => None,
-        };
-
-        Ok(ControlPlaneData {
-            version: CONTROL_PLANE_VERSION,
-            private_key: record.private_key,
-            own_node_id: record.own_node_id,
-            init_params: record.init_params,
-            chain_configuration,
-        })
+        Ok(record)
     }
 }
 
@@ -479,7 +455,6 @@ mod tests {
             Ok(value) => value,
             Err(_) => return,
         };
-        assert_eq!(loaded.version, CONTROL_PLANE_VERSION);
         assert_eq!(loaded.private_key, TEST_PRIVATE_KEY);
         assert_eq!(loaded.own_node_id, TEST_NODE_ID);
         assert_eq!(loaded.init_params, TEST_INIT_PARAMS);

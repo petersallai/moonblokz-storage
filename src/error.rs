@@ -16,6 +16,8 @@ pub enum StorageError {
     ControlPlaneCorrupted,
     /// Persisted control-plane constants are incompatible with current binary constants.
     ControlPlaneIncompatible,
+    /// Backend configuration is invalid for required flash geometry constraints.
+    InvalidConfiguration,
     /// Backend-level I/O failure while executing a storage operation.
     ///
     /// Canonical `code` mapping:

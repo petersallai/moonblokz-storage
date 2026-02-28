@@ -91,10 +91,29 @@ cargo check --no-default-features --features "backend-memory backend-rp2040"
 - `231`: mock flash erase range invalid/out of bounds.
 - `232`: mock flash write out of bounds.
 
+## Storage API
+
+`StorageTrait` exposes synchronous APIs for initialization, indexed block
+persistence/retrieval, and control-plane management:
+
+- `init(private_key, own_node_id, init_params)`
+- `save_block(storage_index, block)`
+- `read_block(storage_index)`
+- `set_chain_configuration(block)`
+- `load_control_data()`
+
+`load_control_data()` returns `ControlPlaneData` with:
+
+- `private_key: [u8; PRIVATE_KEY_SIZE]`
+- `own_node_id: u32`
+- `init_params: [u8; INIT_PARAMS_SIZE]`
+- `chain_configuration: Option<Block>`
+
 ## Memory Backend Capacity Rule
 
 For `backend-memory`, `STORAGE_SIZE` is interpreted as total storage bytes.
 
-- Effective slot count is `STORAGE_SIZE / MAX_BLOCK_SIZE` (integer division).
-- Any remainder bytes (`STORAGE_SIZE % MAX_BLOCK_SIZE`) are intentionally unused.
+- Control-plane reserves `CONTROL_PLANE_COUNT * CONTROL_PLANE_ENTRY_SIZE` bytes at the start.
+- Effective slot count is `(STORAGE_SIZE - control_plane_reserved_bytes) / MAX_BLOCK_SIZE` (integer division, saturating at zero).
+- Any remainder bytes after control-plane reservation and slot packing are intentionally unused.
 - Empty slot is identified by first byte `0` (version byte `0` means empty).

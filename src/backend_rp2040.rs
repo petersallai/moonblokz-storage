@@ -1,7 +1,8 @@
 /*! RP2040 backend geometry mapping and synchronous flash save/retrieve paths. */
 
 use crate::{
-    ControlPlaneData, INIT_PARAMS_SIZE, StorageError, StorageIndex, StorageTrait,
+    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
+    StorageIndex, StorageTrait,
 };
 use core::cell::RefCell;
 use moonblokz_chain_types::{Block, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
@@ -22,6 +23,19 @@ pub const RP2040_DEFAULT_FLASH_SIZE: usize = 2 * 1024 * 1024;
 const SLOT_HASH_OFFSET: usize = MAX_BLOCK_SIZE;
 /// Total bytes used by one persisted slot (`block bytes + hash metadata`).
 const SLOT_SIZE_BYTES: usize = MAX_BLOCK_SIZE + HASH_SIZE;
+/// Reserved control-plane bytes (one full page per replica).
+const CONTROL_PLANE_RESERVED_BYTES: usize = CONTROL_PLANE_COUNT * FLASH_PAGE_SIZE;
+
+const CP_VERSION_OFFSET: usize = 0;
+const CP_PRIVATE_KEY_SIZE_OFFSET: usize = CP_VERSION_OFFSET + 1;
+const CP_PRIVATE_KEY_OFFSET: usize = CP_PRIVATE_KEY_SIZE_OFFSET + 1;
+const CP_OWN_NODE_ID_OFFSET: usize = CP_PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE;
+const CP_INIT_PARAMS_SIZE_OFFSET: usize = CP_OWN_NODE_ID_OFFSET + 4;
+const CP_INIT_PARAMS_OFFSET: usize = CP_INIT_PARAMS_SIZE_OFFSET + 1;
+const CP_MAX_BLOCK_SIZE_OFFSET: usize = CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE;
+const CP_CHAIN_CONFIG_OFFSET: usize = CP_MAX_BLOCK_SIZE_OFFSET + 2;
+const CP_CRC32_OFFSET: usize = CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE;
+const CONTROL_PLANE_ENTRY_SIZE: usize = CP_CRC32_OFFSET + 4;
 
 /// Number of block slots per RP2040 flash page.
 pub const BLOCKS_PER_PAGE: usize = FLASH_PAGE_SIZE / SLOT_SIZE_BYTES;
@@ -33,6 +47,9 @@ pub const BLOCKS_PER_PAGE_INDEX: StorageIndex = BLOCKS_PER_PAGE as StorageIndex;
 const _: () = {
     if BLOCKS_PER_PAGE == 0 {
         panic!("MAX_BLOCK_SIZE must allow at least one block in a 4096-byte RP2040 page");
+    }
+    if CONTROL_PLANE_ENTRY_SIZE > FLASH_PAGE_SIZE {
+        panic!("control-plane entry must fit in one RP2040 flash page");
     }
 };
 
@@ -83,6 +100,15 @@ pub struct Rp2040Backend<const RP2040_FLASH_SIZE: usize = RP2040_DEFAULT_FLASH_S
 }
 
 impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
+    fn validate_page_aligned_start_address(
+        data_storage_start_address: usize,
+    ) -> Result<(), StorageError> {
+        if data_storage_start_address % FLASH_PAGE_SIZE != 0 {
+            return Err(StorageError::InvalidConfiguration);
+        }
+        Ok(())
+    }
+
     /// Creates a new RP2040 backend instance.
     ///
     /// Parameters:
@@ -101,15 +127,16 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     pub fn new(
         flash_peripheral: impl Peripheral<P = FLASH> + 'static,
         data_storage_start_address: usize,
-    ) -> Self {
+    ) -> Result<Self, StorageError> {
+        Self::validate_page_aligned_start_address(data_storage_start_address)?;
         let max_storage_slots = Self::calculate_max_storage_slots(data_storage_start_address);
 
-        Self {
+        Ok(Self {
             flash: RefCell::new(Flash::new_blocking(flash_peripheral)),
             data_storage_start_address,
             max_storage_slots,
             page_buffer: RefCell::new([0xFF; FLASH_PAGE_SIZE]),
-        }
+        })
     }
 
     /// Creates a host/non-ARM RP2040 backend with an in-memory flash mock.
@@ -124,15 +151,16 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     /// let _backend = Rp2040Backend::<{ 2 * 4096 }>::new(0);
     /// ```
     #[cfg(not(target_arch = "arm"))]
-    pub fn new(data_storage_start_address: usize) -> Self {
+    pub fn new(data_storage_start_address: usize) -> Result<Self, StorageError> {
+        Self::validate_page_aligned_start_address(data_storage_start_address)?;
         let max_storage_slots = Self::calculate_max_storage_slots(data_storage_start_address);
 
-        Self {
+        Ok(Self {
             data_storage_start_address,
             max_storage_slots,
             page_buffer: RefCell::new([0xFF; FLASH_PAGE_SIZE]),
             flash_mock: RefCell::new(MockFlash::new()),
-        }
+        })
     }
 
     /// Creates a host-test RP2040 backend with an in-memory flash mock.
@@ -144,28 +172,32 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     /// ```ignore
     /// use moonblokz_storage::backend_rp2040::Rp2040Backend;
     ///
-    /// let _backend = Rp2040Backend::<{ 2 * 4096 }>::new_for_tests(0);
+    /// let _backend = Rp2040Backend::<{ 2 * 4096 }>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
     /// ```
     #[cfg(test)]
-    pub fn new_for_tests(data_storage_start_address: usize) -> Self {
+    pub fn new_for_tests(data_storage_start_address: usize) -> Result<Self, StorageError> {
+        Self::validate_page_aligned_start_address(data_storage_start_address)?;
         let max_storage_slots = Self::calculate_max_storage_slots(data_storage_start_address);
 
-        Self {
+        Ok(Self {
             data_storage_start_address,
             max_storage_slots,
             page_buffer: RefCell::new([0xFF; FLASH_PAGE_SIZE]),
             flash_mock: RefCell::new(MockFlash::new()),
-        }
+        })
     }
 
     fn calculate_max_storage_slots(data_storage_start_address: usize) -> StorageIndex {
         let available_bytes = RP2040_FLASH_SIZE.saturating_sub(data_storage_start_address);
-        let usable_pages = available_bytes / FLASH_PAGE_SIZE;
+        let block_storage_bytes = available_bytes.saturating_sub(CONTROL_PLANE_RESERVED_BYTES);
+        let usable_pages = block_storage_bytes / FLASH_PAGE_SIZE;
         (usable_pages * BLOCKS_PER_PAGE) as StorageIndex
     }
 
     fn page_flash_address(&self, mapping: &Rp2040SlotMapping) -> usize {
-        self.data_storage_start_address + mapping.page_index as usize * FLASH_PAGE_SIZE
+        self.data_storage_start_address
+            + CONTROL_PLANE_RESERVED_BYTES
+            + mapping.page_index as usize * FLASH_PAGE_SIZE
     }
 
     #[cfg(test)]
@@ -349,15 +381,295 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         let slot_end = slot_start + SLOT_SIZE_BYTES;
         self.flash_mock.borrow_mut().data[slot_start..slot_end].copy_from_slice(slot_bytes);
     }
+
+    fn control_plane_page_address(&self, replica_index: usize) -> usize {
+        self.data_storage_start_address + replica_index * FLASH_PAGE_SIZE
+    }
+
+    fn read_page(&self, page_address: usize, out: &mut [u8; FLASH_PAGE_SIZE]) -> Result<(), StorageError> {
+        #[cfg(any(test, not(target_arch = "arm")))]
+        {
+            let flash_mock = self.flash_mock.borrow();
+            return flash_mock
+                .read(page_address as u32, out)
+                .map_err(|code| StorageError::BackendIo { code });
+        }
+
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            let mut flash = self.flash.borrow_mut();
+            return flash
+                .blocking_read(page_address as u32, out)
+                .map_err(|_| StorageError::BackendIo { code: 210 });
+        }
+
+        #[allow(unreachable_code)]
+        Err(StorageError::BackendIo { code: 210 })
+    }
+
+    fn erase_page(&self, page_address: usize) -> Result<(), StorageError> {
+        let page_end = page_address + FLASH_PAGE_SIZE;
+        #[cfg(any(test, not(target_arch = "arm")))]
+        {
+            let mut flash_mock = self.flash_mock.borrow_mut();
+            return flash_mock
+                .erase(page_address as u32, page_end as u32)
+                .map_err(|code| StorageError::BackendIo { code });
+        }
+
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            let mut flash = self.flash.borrow_mut();
+            return flash
+                .blocking_erase(page_address as u32, page_end as u32)
+                .map_err(|_| StorageError::BackendIo { code: 211 });
+        }
+
+        #[allow(unreachable_code)]
+        Err(StorageError::BackendIo { code: 211 })
+    }
+
+    fn write_page(&self, page_address: usize, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), StorageError> {
+        #[cfg(any(test, not(target_arch = "arm")))]
+        {
+            let mut flash_mock = self.flash_mock.borrow_mut();
+            return flash_mock
+                .write(page_address as u32, page)
+                .map_err(|code| StorageError::BackendIo { code });
+        }
+
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            let mut flash = self.flash.borrow_mut();
+            return flash
+                .blocking_write(page_address as u32, page)
+                .map_err(|_| StorageError::BackendIo { code: 212 });
+        }
+
+        #[allow(unreachable_code)]
+        Err(StorageError::BackendIo { code: 212 })
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            crc ^= bytes[i] as u32;
+            let mut bit = 0usize;
+            while bit < 8 {
+                if (crc & 1) != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320;
+                } else {
+                    crc >>= 1;
+                }
+                bit += 1;
+            }
+            i += 1;
+        }
+        !crc
+    }
+
+    fn serialize_control_record(record: &ControlPlaneData) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
+        let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
+        out[CP_VERSION_OFFSET] = CONTROL_PLANE_VERSION;
+        out[CP_PRIVATE_KEY_SIZE_OFFSET] = PRIVATE_KEY_SIZE as u8;
+        out[CP_PRIVATE_KEY_OFFSET..CP_PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]
+            .copy_from_slice(&record.private_key);
+        out[CP_OWN_NODE_ID_OFFSET..CP_OWN_NODE_ID_OFFSET + 4]
+            .copy_from_slice(&record.own_node_id.to_le_bytes());
+        out[CP_INIT_PARAMS_SIZE_OFFSET] = INIT_PARAMS_SIZE as u8;
+        out[CP_INIT_PARAMS_OFFSET..CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
+            .copy_from_slice(&record.init_params);
+
+        let max_block_size = MAX_BLOCK_SIZE as u16;
+        out[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 2]
+            .copy_from_slice(&max_block_size.to_le_bytes());
+
+        if let Some(chain_configuration) = &record.chain_configuration {
+            let bytes = chain_configuration.as_bytes();
+            out[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + bytes.len()].copy_from_slice(bytes);
+        }
+
+        let crc = Self::crc32(&out[..CP_CRC32_OFFSET]);
+        out[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+        out
+    }
+
+    fn deserialize_control_record(
+        bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
+    ) -> Result<ControlPlaneData, StorageError> {
+        let all_zero = bytes.iter().all(|v| *v == 0);
+        let all_ff = bytes.iter().all(|v| *v == 0xFF);
+        if all_zero || all_ff {
+            return Err(StorageError::ControlPlaneUninitialized);
+        }
+
+        let mut crc_bytes = [0u8; 4];
+        crc_bytes.copy_from_slice(&bytes[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4]);
+        let stored_crc = u32::from_le_bytes(crc_bytes);
+        let computed_crc = Self::crc32(&bytes[..CP_CRC32_OFFSET]);
+        if stored_crc != computed_crc {
+            return Err(StorageError::ControlPlaneCorrupted);
+        }
+
+        if bytes[CP_VERSION_OFFSET] != CONTROL_PLANE_VERSION
+            || bytes[CP_PRIVATE_KEY_SIZE_OFFSET] as usize != PRIVATE_KEY_SIZE
+            || bytes[CP_INIT_PARAMS_SIZE_OFFSET] as usize != INIT_PARAMS_SIZE
+        {
+            return Err(StorageError::ControlPlaneIncompatible);
+        }
+
+        let mut max_block_size_bytes = [0u8; 2];
+        max_block_size_bytes
+            .copy_from_slice(&bytes[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 2]);
+        let persisted_max_block_size = u16::from_le_bytes(max_block_size_bytes) as usize;
+        if persisted_max_block_size != MAX_BLOCK_SIZE {
+            return Err(StorageError::ControlPlaneIncompatible);
+        }
+
+        let mut private_key = [0u8; PRIVATE_KEY_SIZE];
+        private_key.copy_from_slice(&bytes[CP_PRIVATE_KEY_OFFSET..CP_PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]);
+
+        let mut own_node_id_bytes = [0u8; 4];
+        own_node_id_bytes.copy_from_slice(&bytes[CP_OWN_NODE_ID_OFFSET..CP_OWN_NODE_ID_OFFSET + 4]);
+        let own_node_id = u32::from_le_bytes(own_node_id_bytes);
+
+        let mut init_params = [0u8; INIT_PARAMS_SIZE];
+        init_params.copy_from_slice(&bytes[CP_INIT_PARAMS_OFFSET..CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]);
+
+        let chain_configuration = if bytes[CP_CHAIN_CONFIG_OFFSET] == 0 {
+            None
+        } else {
+            let mut cfg = [0u8; MAX_BLOCK_SIZE];
+            cfg.copy_from_slice(&bytes[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE]);
+            Some(Block::from_bytes(&cfg).map_err(|_| StorageError::ControlPlaneCorrupted)?)
+        };
+
+        Ok(ControlPlaneData {
+            private_key,
+            own_node_id,
+            init_params,
+            chain_configuration,
+        })
+    }
+
+    fn read_control_record_from_replica(&self, replica_index: usize) -> Result<ControlPlaneData, StorageError> {
+        let page_address = self.control_plane_page_address(replica_index);
+        let mut page = [0u8; FLASH_PAGE_SIZE];
+        self.read_page(page_address, &mut page)?;
+
+        let mut entry = [0u8; CONTROL_PLANE_ENTRY_SIZE];
+        entry.copy_from_slice(&page[..CONTROL_PLANE_ENTRY_SIZE]);
+        Self::deserialize_control_record(&entry)
+    }
+
+    fn write_control_record_to_replica(
+        &self,
+        replica_index: usize,
+        record: &ControlPlaneData,
+    ) -> Result<(), StorageError> {
+        let page_address = self.control_plane_page_address(replica_index);
+        let mut page = [0u8; FLASH_PAGE_SIZE];
+        page.fill(0);
+        let encoded = Self::serialize_control_record(record);
+        page[..CONTROL_PLANE_ENTRY_SIZE].copy_from_slice(&encoded);
+        self.erase_page(page_address)?;
+        self.write_page(page_address, &page)
+    }
+
+    fn load_primary_control_record_and_repair(&self) -> Result<ControlPlaneData, StorageError> {
+        let mut first_valid_record: Option<ControlPlaneData> = None;
+        let mut first_valid_index: Option<usize> = None;
+        let mut invalid = [usize::MAX; CONTROL_PLANE_COUNT];
+        let mut invalid_len = 0usize;
+        let mut saw_non_uninitialized = false;
+        let mut saw_incompatible = false;
+
+        let mut i = 0usize;
+        while i < CONTROL_PLANE_COUNT {
+            match self.read_control_record_from_replica(i) {
+                Ok(record) => {
+                    if first_valid_record.is_none() {
+                        first_valid_index = Some(i);
+                        first_valid_record = Some(record);
+                    }
+                }
+                Err(StorageError::ControlPlaneUninitialized) => {
+                    invalid[invalid_len] = i;
+                    invalid_len += 1;
+                }
+                Err(StorageError::ControlPlaneIncompatible) => {
+                    saw_non_uninitialized = true;
+                    saw_incompatible = true;
+                    invalid[invalid_len] = i;
+                    invalid_len += 1;
+                }
+                Err(StorageError::ControlPlaneCorrupted) => {
+                    saw_non_uninitialized = true;
+                    invalid[invalid_len] = i;
+                    invalid_len += 1;
+                }
+                Err(err) => return Err(err),
+            }
+            i += 1;
+        }
+
+        let record = match first_valid_record {
+            Some(value) => value,
+            None => {
+                if saw_incompatible {
+                    return Err(StorageError::ControlPlaneIncompatible);
+                }
+                if saw_non_uninitialized {
+                    return Err(StorageError::ControlPlaneCorrupted);
+                }
+                return Err(StorageError::ControlPlaneUninitialized);
+            }
+        };
+
+        let mut j = 0usize;
+        while j < invalid_len {
+            let target = invalid[j];
+            if Some(target) != first_valid_index {
+                self.write_control_record_to_replica(target, &record)?;
+            }
+            j += 1;
+        }
+
+        Ok(record)
+    }
 }
 
 impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH_SIZE> {
     fn init(
         &mut self,
-        _private_key: [u8; PRIVATE_KEY_SIZE],
-        _own_node_id: u32,
-        _init_params: [u8; INIT_PARAMS_SIZE],
+        private_key: [u8; PRIVATE_KEY_SIZE],
+        own_node_id: u32,
+        init_params: [u8; INIT_PARAMS_SIZE],
     ) -> Result<(), StorageError> {
+        Self::validate_page_aligned_start_address(self.data_storage_start_address)?;
+        let first_page = self.data_storage_start_address / FLASH_PAGE_SIZE;
+        let page_count = (RP2040_FLASH_SIZE.saturating_sub(self.data_storage_start_address)) / FLASH_PAGE_SIZE;
+        let mut page = 0usize;
+        while page < page_count {
+            let page_address = (first_page + page) * FLASH_PAGE_SIZE;
+            self.erase_page(page_address)?;
+            page += 1;
+        }
+
+        let record = ControlPlaneData {
+            private_key,
+            own_node_id,
+            init_params,
+            chain_configuration: None,
+        };
+
+        let mut replica_index = 0usize;
+        while replica_index < CONTROL_PLANE_COUNT {
+            self.write_control_record_to_replica(replica_index, &record)?;
+            replica_index += 1;
+        }
+
         Ok(())
     }
 
@@ -383,12 +695,28 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
         self.read_slot(&mapping)
     }
 
-    fn set_chain_configuration(&mut self, _block: &Block) -> Result<(), StorageError> {
-        Err(StorageError::BackendIo { code: 213 })
+    fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
+        let mut record = self.load_primary_control_record_and_repair()?;
+        if record.chain_configuration.is_some() {
+            return Err(StorageError::ChainConfigurationAlreadySet);
+        }
+
+        record.chain_configuration = Some(
+            Block::from_bytes(block.as_bytes()).map_err(|_| StorageError::BackendIo { code: 213 })?,
+        );
+
+        let mut replica_index = 0usize;
+        while replica_index < CONTROL_PLANE_COUNT {
+            self.write_control_record_to_replica(replica_index, &record)?;
+            replica_index += 1;
+        }
+
+        Ok(())
     }
 
     fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
-        Err(StorageError::BackendIo { code: 213 })
+        let record = self.load_primary_control_record_and_repair()?;
+        Ok(record)
     }
 }
 
@@ -437,6 +765,13 @@ impl<const SIZE: usize> MockFlash<SIZE> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CONTROL_PLANE_COUNT;
+
+    const TEST_FLASH_ONE_BLOCK_PAGE: usize = (CONTROL_PLANE_COUNT + 1) * FLASH_PAGE_SIZE;
+    const TEST_FLASH_TWO_BLOCK_PAGES: usize = (CONTROL_PLANE_COUNT + 2) * FLASH_PAGE_SIZE;
+    const TEST_FLASH_THREE_BLOCK_PAGES: usize = (CONTROL_PLANE_COUNT + 3) * FLASH_PAGE_SIZE;
+    const TEST_FLASH_FOUR_BLOCK_PAGES: usize = (CONTROL_PLANE_COUNT + 4) * FLASH_PAGE_SIZE;
+    const TEST_FLASH_EIGHT_BLOCK_PAGES: usize = (CONTROL_PLANE_COUNT + 8) * FLASH_PAGE_SIZE;
 
     fn block_from_marker(marker: u8) -> Block {
         let mut bytes = [0u8; MAX_BLOCK_SIZE];
@@ -452,11 +787,17 @@ mod tests {
 
     #[test]
     fn new_calculates_max_slots_from_storage_geometry() {
-        let backend = Rp2040Backend::<{ 3 * FLASH_PAGE_SIZE }>::new_for_tests(FLASH_PAGE_SIZE);
+        let backend = Rp2040Backend::<TEST_FLASH_THREE_BLOCK_PAGES>::new_for_tests(FLASH_PAGE_SIZE).unwrap_or_else(|_| unreachable!());
         assert_eq!(
             backend.max_storage_slots,
             (2 * BLOCKS_PER_PAGE) as StorageIndex
         );
+    }
+
+    #[test]
+    fn new_for_tests_returns_error_on_misaligned_start_address() {
+        let backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(1);
+        assert!(matches!(backend, Err(StorageError::InvalidConfiguration)));
     }
 
     #[test]
@@ -508,7 +849,7 @@ mod tests {
 
     #[test]
     fn save_block_succeeds_for_valid_index() {
-        let mut backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_TWO_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(7);
 
         let save_result = backend.save_block(1, &block);
@@ -525,7 +866,7 @@ mod tests {
 
     #[test]
     fn save_block_rejects_invalid_index() {
-        let mut backend = Rp2040Backend::<FLASH_PAGE_SIZE>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(8);
 
         let save_result = backend.save_block(BLOCKS_PER_PAGE as StorageIndex, &block);
@@ -534,7 +875,7 @@ mod tests {
 
     #[test]
     fn save_block_succeeds_at_last_valid_index() {
-        let mut backend = Rp2040Backend::<{ 8 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_EIGHT_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(9);
         let last_valid_index = backend.max_storage_slots - 1;
 
@@ -544,37 +885,37 @@ mod tests {
 
     #[test]
     fn storage_start_address_reduces_capacity() {
-        let backend = Rp2040Backend::<{ 3 * FLASH_PAGE_SIZE }>::new_for_tests(2 * FLASH_PAGE_SIZE);
+        let backend = Rp2040Backend::<TEST_FLASH_THREE_BLOCK_PAGES>::new_for_tests(2 * FLASH_PAGE_SIZE).unwrap_or_else(|_| unreachable!());
         assert_eq!(backend.max_storage_slots, BLOCKS_PER_PAGE as StorageIndex);
         assert_eq!(backend.data_storage_start_address, 2 * FLASH_PAGE_SIZE);
     }
 
     #[test]
     fn slot_flash_address_uses_storage_start_address() {
-        let backend = Rp2040Backend::<{ 4 * FLASH_PAGE_SIZE }>::new_for_tests(FLASH_PAGE_SIZE);
+        let backend = Rp2040Backend::<TEST_FLASH_FOUR_BLOCK_PAGES>::new_for_tests(FLASH_PAGE_SIZE).unwrap_or_else(|_| unreachable!());
         let mapping = map_storage_index(BLOCKS_PER_PAGE as StorageIndex);
         let address = backend.slot_flash_address(&mapping);
 
-        assert_eq!(address, 2 * FLASH_PAGE_SIZE);
+        assert_eq!(address, (CONTROL_PLANE_COUNT + 2) * FLASH_PAGE_SIZE);
     }
 
     #[test]
     fn read_block_reports_absent_for_empty_slot() {
-        let backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let read_result = backend.read_block(0);
         assert!(matches!(read_result, Err(StorageError::BlockAbsent)));
     }
 
     #[test]
     fn read_block_rejects_invalid_index() {
-        let backend = Rp2040Backend::<FLASH_PAGE_SIZE>::new_for_tests(0);
+        let backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let read_result = backend.read_block(BLOCKS_PER_PAGE as StorageIndex);
         assert!(matches!(read_result, Err(StorageError::InvalidIndex)));
     }
 
     #[test]
     fn read_block_detects_hash_mismatch() {
-        let mut backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(11);
         assert!(backend.save_block(0, &block).is_ok());
 
@@ -588,7 +929,7 @@ mod tests {
 
     #[test]
     fn read_block_succeeds_at_last_valid_index() {
-        let mut backend = Rp2040Backend::<{ 8 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_EIGHT_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(12);
         let last_valid_index = backend.max_storage_slots - 1;
         assert!(backend.save_block(last_valid_index, &block).is_ok());
@@ -599,7 +940,7 @@ mod tests {
 
     #[test]
     fn read_block_detects_partially_written_slot_data() {
-        let backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let mut raw_slot = [0xFFu8; SLOT_SIZE_BYTES];
         raw_slot[0] = 1;
         raw_slot[1] = 2;
@@ -611,7 +952,7 @@ mod tests {
 
     #[test]
     fn read_block_detects_malformed_slot_with_matching_hash() {
-        let backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let mut raw_slot = [0u8; SLOT_SIZE_BYTES];
         let computed_hash = calculate_hash(&raw_slot[..MAX_BLOCK_SIZE]);
         raw_slot[SLOT_HASH_OFFSET..SLOT_HASH_OFFSET + HASH_SIZE].copy_from_slice(&computed_hash);
@@ -623,7 +964,7 @@ mod tests {
 
     #[test]
     fn startup_read_cycle_reports_typed_outcomes_for_mixed_slot_states() {
-        let mut backend = Rp2040Backend::<{ 2 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_TWO_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block = block_from_marker(13);
         assert!(backend.save_block(0, &block).is_ok());
 
@@ -642,7 +983,7 @@ mod tests {
 
     #[test]
     fn integration_startup_ingest_query_flow_with_valid_dataset() {
-        let mut backend = Rp2040Backend::<{ 4 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_THREE_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block_a = block_from_marker(21);
         let block_b = block_from_marker(22);
         let block_c = block_from_marker(23);
@@ -695,7 +1036,7 @@ mod tests {
 
     #[test]
     fn integration_startup_and_query_flow_reports_integrity_on_corrupted_dataset() {
-        let mut backend = Rp2040Backend::<{ 4 * FLASH_PAGE_SIZE }>::new_for_tests(0);
+        let mut backend = Rp2040Backend::<TEST_FLASH_TWO_BLOCK_PAGES>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
         let block_ok = block_from_marker(31);
         let block_corrupted = block_from_marker(32);
 
@@ -730,5 +1071,87 @@ mod tests {
             backend.read_block(invalid_index),
             Err(StorageError::InvalidIndex)
         ));
+    }
+
+    #[test]
+    fn control_plane_load_reports_uninitialized_before_init() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneUninitialized)
+        ));
+    }
+
+    #[test]
+    fn control_plane_init_and_load_round_trip() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
+        let private_key = [7u8; PRIVATE_KEY_SIZE];
+        let init_params = [9u8; INIT_PARAMS_SIZE];
+        assert!(backend.init(private_key, 42, init_params).is_ok());
+
+        let loaded = backend.load_control_data();
+        assert!(loaded.is_ok());
+        let loaded = match loaded {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+
+        assert_eq!(loaded.private_key, private_key);
+        assert_eq!(loaded.own_node_id, 42);
+        assert_eq!(loaded.init_params, init_params);
+        assert!(loaded.chain_configuration.is_none());
+    }
+
+    #[test]
+    fn control_plane_set_chain_configuration_is_set_once() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
+        assert!(backend
+            .init([1u8; PRIVATE_KEY_SIZE], 1, [2u8; INIT_PARAMS_SIZE])
+            .is_ok());
+        let cfg_block = block_from_marker(55);
+
+        assert!(backend.set_chain_configuration(&cfg_block).is_ok());
+        assert!(matches!(
+            backend.set_chain_configuration(&cfg_block),
+            Err(StorageError::ChainConfigurationAlreadySet)
+        ));
+
+        let loaded = backend.load_control_data();
+        assert!(loaded.is_ok());
+        let loaded = match loaded {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        assert!(loaded.chain_configuration.is_some());
+    }
+
+    #[test]
+    fn control_plane_load_repairs_corrupted_replica() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
+        assert!(backend
+            .init([1u8; PRIVATE_KEY_SIZE], 2, [3u8; INIT_PARAMS_SIZE])
+            .is_ok());
+
+        // Corrupt first replica header byte.
+        let replica0_addr = backend.control_plane_page_address(0);
+        backend.flash_mock.borrow_mut().data[replica0_addr] ^= 0xFF;
+
+        assert!(backend.load_control_data().is_ok());
+
+        // Re-read replica page and check CRC-valid deserialization.
+        let mut repaired_page = [0u8; FLASH_PAGE_SIZE];
+        assert!(backend.read_page(replica0_addr, &mut repaired_page).is_ok());
+        let mut repaired_entry = [0u8; CONTROL_PLANE_ENTRY_SIZE];
+        repaired_entry.copy_from_slice(&repaired_page[..CONTROL_PLANE_ENTRY_SIZE]);
+        let repaired = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::deserialize_control_record(&repaired_entry);
+        assert!(repaired.is_ok());
+    }
+
+    #[test]
+    fn init_returns_error_on_misaligned_start_address() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0).unwrap_or_else(|_| unreachable!());
+        backend.data_storage_start_address = 1;
+        let init_result = backend.init([1u8; PRIVATE_KEY_SIZE], 1, [0u8; INIT_PARAMS_SIZE]);
+        assert!(matches!(init_result, Err(StorageError::InvalidConfiguration)));
     }
 }

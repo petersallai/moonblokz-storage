@@ -9,12 +9,22 @@ mod tests {
     #[cfg(feature = "backend-memory")]
     const TEST_STORAGE_SIZE: usize = 8 * MAX_BLOCK_SIZE;
     #[cfg(feature = "backend-rp2040")]
-    const TEST_STORAGE_SIZE: usize = 4 * 4096;
+    const TEST_STORAGE_SIZE: usize = (crate::CONTROL_PLANE_COUNT + 2) * 4096;
     #[cfg(feature = "backend-rp2040")]
     const TEST_INVALID_INDEX: u32 = ((TEST_STORAGE_SIZE / crate::backend_rp2040::FLASH_PAGE_SIZE)
         * crate::backend_rp2040::BLOCKS_PER_PAGE) as u32;
     #[cfg(feature = "backend-memory")]
-    const TEST_INVALID_INDEX: u32 = (TEST_STORAGE_SIZE / MAX_BLOCK_SIZE) as u32;
+    const TEST_CONTROL_PLANE_ENTRY_SIZE: usize =
+        1 + 1 + PRIVATE_KEY_SIZE + 4 + 1 + crate::INIT_PARAMS_SIZE + 2 + MAX_BLOCK_SIZE + 4;
+    #[cfg(feature = "backend-memory")]
+    const TEST_CONTROL_PLANE_RESERVED_BYTES: usize =
+        crate::CONTROL_PLANE_COUNT * TEST_CONTROL_PLANE_ENTRY_SIZE;
+    #[cfg(feature = "backend-memory")]
+    const TEST_INVALID_INDEX: u32 = if TEST_STORAGE_SIZE > TEST_CONTROL_PLANE_RESERVED_BYTES {
+        ((TEST_STORAGE_SIZE - TEST_CONTROL_PLANE_RESERVED_BYTES) / MAX_BLOCK_SIZE) as u32
+    } else {
+        0
+    };
 
     #[cfg(feature = "backend-memory")]
     fn new_backend() -> MoonblokzStorage<TEST_STORAGE_SIZE> {
@@ -23,7 +33,7 @@ mod tests {
 
     #[cfg(feature = "backend-rp2040")]
     fn new_backend() -> MoonblokzStorage<TEST_STORAGE_SIZE> {
-        MoonblokzStorage::<TEST_STORAGE_SIZE>::new_for_tests(0)
+        MoonblokzStorage::<TEST_STORAGE_SIZE>::new_for_tests(0).unwrap_or_else(|_| unreachable!())
     }
 
     fn block_from_marker(marker: u8) -> Block {
