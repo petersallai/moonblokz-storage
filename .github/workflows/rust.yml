@@ -1,4 +1,4 @@
-name: Rust
+name: Rust CI
 
 on:
   push:
@@ -7,30 +7,54 @@ on:
 jobs:
   backend-matrix:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        backend:
-          - backend-memory
-          - backend-rp2040
     steps:
-      - name: Checkout
+      - name: Checkout moonblokz-storage
         uses: actions/checkout@v4
+        with:
+          path: moonblokz-storage
+
+      - name: Checkout moonblokz-chain-types
+        uses: actions/checkout@v4
+        with:
+          repository: petersallai/moonblokz-chain-types
+          path: moonblokz-chain-types
+
+      - name: Checkout moonblokz-crypto-lib
+        uses: actions/checkout@v4
+        with:
+          repository: petersallai/moonblokz-crypto-lib
+          path: moonblokz-crypto-lib
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test backend
-        run: cargo test --no-default-features --features "${{ matrix.backend }}"
+      - name: Run backend matrix and exclusivity checks
+        working-directory: moonblokz-storage
+        run: ./run_tests.sh
 
   feature-exclusivity:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout moonblokz-storage
         uses: actions/checkout@v4
+        with:
+          path: moonblokz-storage
+
+      - name: Checkout moonblokz-chain-types
+        uses: actions/checkout@v4
+        with:
+          repository: petersallai/moonblokz-chain-types
+          path: moonblokz-chain-types
+
+      - name: Checkout moonblokz-crypto-lib
+        uses: actions/checkout@v4
+        with:
+          repository: petersallai/moonblokz-crypto-lib
+          path: moonblokz-crypto-lib
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Check backend feature exclusivity
+        working-directory: moonblokz-storage
         run: ./scripts/check_backend_features.sh
