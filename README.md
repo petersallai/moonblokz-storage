@@ -41,6 +41,8 @@ Release expectations for crates.io phase:
 ## Developer Guides
 
 - `docs/add-new-device-support.md`: checklist and workflow for adding a new backend feature while preserving storage contract semantics.
+- `docs/release-process.md`: versioning, changelog, tagging, and release checklist.
+- `CHANGELOG.md`: user-visible release history.
 
 ## Backend Feature Selection
 
