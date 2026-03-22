@@ -68,8 +68,19 @@ pub const CONTROL_PLANE_COUNT: usize = 3;
 pub const CONTROL_PLANE_VERSION: u8 = 1;
 
 /// Canonical control-plane data returned by `load_control_data`.
+///
+/// # Security model
+///
+/// The threat model does not include physical flash dumps.
+/// Control-plane integrity is protected by CRC32 for bit-rot detection only,
+/// not for tamper-resistance. Private key bytes are stored in plaintext.
+///
+/// # Binary size
+///
+/// This struct intentionally omits `Debug` and `Clone` derives to minimize
+/// binary size on embedded targets.
 pub struct ControlPlaneData {
-    /// Persisted private key.
+    /// Persisted private key (plaintext, not encrypted at rest).
     pub private_key: [u8; PRIVATE_KEY_SIZE],
     /// Persisted own node id.
     pub own_node_id: u32,
@@ -122,12 +133,7 @@ pub trait StorageTrait {
     ///     [0u8; moonblokz_storage::INIT_PARAMS_SIZE]
     /// ).is_ok());
     /// ```
-    fn init(
-        &mut self,
-        private_key: [u8; PRIVATE_KEY_SIZE],
-        own_node_id: u32,
-        init_params: [u8; INIT_PARAMS_SIZE],
-    ) -> Result<(), StorageError>;
+    fn init(&mut self, private_key: [u8; PRIVATE_KEY_SIZE], own_node_id: u32, init_params: [u8; INIT_PARAMS_SIZE]) -> Result<(), StorageError>;
 
     /// Persists a block at a specific `storage_index`.
     ///
@@ -168,19 +174,13 @@ pub trait StorageTrait {
     /// let mut storage = DummyStorage;
     /// let mut bytes = [0u8; moonblokz_chain_types::HEADER_SIZE];
     /// bytes[0] = 1;
-    /// let block_result = moonblokz_chain_types::Block::from_bytes(&bytes);
-    /// assert!(block_result.is_ok());
-    /// let block = match block_result {
-    ///     Ok(value) => value,
-    ///     Err(_) => return,
+    /// let block = match moonblokz_chain_types::Block::from_bytes(&bytes) {
+    ///     Ok(b) => b,
+    ///     Err(_) => panic!("block parse failed"),
     /// };
     /// assert!(storage.save_block(0, &block).is_ok());
     /// ```
-    fn save_block(
-        &mut self,
-        storage_index: StorageIndex,
-        block: &Block,
-    ) -> Result<(), StorageError>;
+    fn save_block(&mut self, storage_index: StorageIndex, block: &Block) -> Result<(), StorageError>;
 
     /// Reads and returns a block from a specific `storage_index`.
     ///

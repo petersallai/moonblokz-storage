@@ -1,6 +1,11 @@
 /*! Core error model for MoonBlokz storage public API contracts. */
 
 /// Public storage error categories used by chain-level logic.
+///
+/// This enum intentionally omits `Debug`, `PartialEq`, and `Clone` derives to
+/// minimize binary size on embedded targets where every byte counts.
+/// `Debug` is conditionally derived for test builds only.
+#[cfg_attr(test, derive(Debug))]
 pub enum StorageError {
     /// `storage_index` is outside valid storage bounds.
     InvalidIndex,

@@ -1,9 +1,6 @@
 /*! In-memory backend module for MoonBlokz storage contract testing/integration. */
 
-use crate::{
-    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
-    StorageIndex, StorageTrait,
-};
+use crate::{CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError, StorageIndex, StorageTrait};
 use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
@@ -20,6 +17,9 @@ const CONTROL_PLANE_ENTRY_SIZE: usize = CONTROL_CRC32_OFFSET + 4;
 const CONTROL_PLANE_RESERVED_BYTES: usize = CONTROL_PLANE_COUNT * CONTROL_PLANE_ENTRY_SIZE;
 
 /// In-memory backend with compile-time byte capacity.
+///
+/// This struct intentionally omits a `Default` impl to minimize binary size
+/// on embedded targets.
 ///
 /// Capacity rule:
 /// - Control-plane uses the first `CONTROL_PLANE_COUNT * CONTROL_PLANE_ENTRY_SIZE` bytes.
@@ -41,11 +41,9 @@ const CONTROL_PLANE_RESERVED_BYTES: usize = CONTROL_PLANE_COUNT * CONTROL_PLANE_
 ///
 /// let mut bytes = [0u8; HEADER_SIZE];
 /// bytes[0] = 1;
-/// let block_result = Block::from_bytes(&bytes);
-/// assert!(block_result.is_ok());
-/// let block = match block_result {
-///     Ok(value) => value,
-///     Err(_) => return,
+/// let block = match Block::from_bytes(&bytes) {
+///     Ok(b) => b,
+///     Err(_) => panic!("block parse failed"),
 /// };
 /// assert!(backend.save_block(1, &block).is_ok());
 ///
@@ -88,9 +86,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
     /// let _backend = MemoryBackend::<{ 8 * MAX_BLOCK_SIZE + 8000 }>::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            storage: [0u8; STORAGE_SIZE],
-        }
+        Self { storage: [0u8; STORAGE_SIZE] }
     }
 
     fn slot_range(storage_index: StorageIndex) -> Result<(usize, usize), StorageError> {
@@ -115,31 +111,25 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out
     }
 
-    fn write_control_plane_entry(
-        &mut self,
-        replica_index: usize,
-        entry: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) {
+    fn write_control_plane_entry(&mut self, replica_index: usize, entry: &[u8; CONTROL_PLANE_ENTRY_SIZE]) {
         let start = Self::control_plane_entry_offset(replica_index);
         let end = start + CONTROL_PLANE_ENTRY_SIZE;
         self.storage[start..end].copy_from_slice(entry);
     }
 
+    /// CRC32 checksum for error-detection only (bit-rot protection).
+    /// This is NOT a cryptographic integrity check and does not provide tamper-resistance.
     fn crc32(bytes: &[u8]) -> u32 {
         let mut crc = 0xFFFF_FFFFu32;
-        let mut i = 0usize;
-        while i < bytes.len() {
-            crc ^= bytes[i] as u32;
-            let mut bit = 0usize;
-            while bit < 8 {
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
                 if (crc & 1) != 0 {
                     crc = (crc >> 1) ^ 0xEDB8_8320;
                 } else {
                     crc >>= 1;
                 }
-                bit += 1;
             }
-            i += 1;
         }
         !crc
     }
@@ -147,21 +137,23 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
     fn serialize_record(record: &ControlPlaneData) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
         let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
         out[VERSION_OFFSET] = CONTROL_PLANE_VERSION;
+        // Intentional truncation: PRIVATE_KEY_SIZE is guaranteed <= 255 by the
+        // control-plane schema.
         out[PRIVATE_KEY_SIZE_OFFSET] = PRIVATE_KEY_SIZE as u8;
-        out[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]
-            .copy_from_slice(&record.private_key);
-        out[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4]
-            .copy_from_slice(&record.own_node_id.to_le_bytes());
+        out[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE].copy_from_slice(&record.private_key);
+        out[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4].copy_from_slice(&record.own_node_id.to_le_bytes());
+        // Intentional truncation: INIT_PARAMS_SIZE is guaranteed <= 255 by the
+        // control-plane schema.
         out[INIT_PARAMS_SIZE_OFFSET] = INIT_PARAMS_SIZE as u8;
-        out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
-            .copy_from_slice(&record.init_params);
+        out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE].copy_from_slice(&record.init_params);
 
+        // Intentional truncation: MAX_BLOCK_SIZE is guaranteed <= 65535 by the
+        // control-plane schema.
         let max_block_size_u16 = MAX_BLOCK_SIZE as u16;
-        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]
-            .copy_from_slice(&max_block_size_u16.to_le_bytes());
+        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2].copy_from_slice(&max_block_size_u16.to_le_bytes());
 
         if let Some(chain_configuration) = &record.chain_configuration {
-            let bytes = chain_configuration.as_bytes();
+            let bytes = chain_configuration.serialized_bytes();
             out[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + bytes.len()].copy_from_slice(bytes);
         }
 
@@ -170,9 +162,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out
     }
 
-    fn deserialize_record(
-        bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) -> Result<ControlPlaneData, StorageError> {
+    fn deserialize_record(bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE]) -> Result<ControlPlaneData, StorageError> {
         if bytes.iter().all(|value| *value == 0) {
             return Err(StorageError::ControlPlaneUninitialized);
         }
@@ -198,8 +188,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         }
 
         let mut max_block_size_bytes = [0u8; 2];
-        max_block_size_bytes
-            .copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]);
+        max_block_size_bytes.copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]);
         let persisted_max_block_size = u16::from_le_bytes(max_block_size_bytes) as usize;
         if persisted_max_block_size != MAX_BLOCK_SIZE {
             return Err(StorageError::ControlPlaneIncompatible);
@@ -240,8 +229,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         let mut saw_incompatible = false;
         let mut saw_corrupted = false;
 
-        let mut index = 0usize;
-        while index < CONTROL_PLANE_COUNT {
+        for index in 0..CONTROL_PLANE_COUNT {
             let entry = self.read_control_plane_entry(index);
             if entry.iter().any(|value| *value != 0) {
                 saw_non_zero = true;
@@ -265,7 +253,6 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
                     invalid_len += 1;
                 }
             }
-            index += 1;
         }
 
         let record = match first_valid_record {
@@ -285,13 +272,11 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         };
 
         let encoded = Self::serialize_record(&record);
-        let mut repair_index = 0usize;
-        while repair_index < invalid_len {
+        for repair_index in 0..invalid_len {
             let target = invalid_indexes[repair_index];
             if Some(target) != first_valid_index {
                 self.write_control_plane_entry(target, &encoded);
             }
-            repair_index += 1;
         }
 
         Ok(record)
@@ -299,21 +284,14 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
 
     fn write_record_to_all_replicas(&mut self, record: &ControlPlaneData) {
         let encoded = Self::serialize_record(record);
-        let mut index = 0usize;
-        while index < CONTROL_PLANE_COUNT {
+        for index in 0..CONTROL_PLANE_COUNT {
             self.write_control_plane_entry(index, &encoded);
-            index += 1;
         }
     }
 }
 
 impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
-    fn init(
-        &mut self,
-        private_key: [u8; PRIVATE_KEY_SIZE],
-        own_node_id: u32,
-        init_params: [u8; INIT_PARAMS_SIZE],
-    ) -> Result<(), StorageError> {
+    fn init(&mut self, private_key: [u8; PRIVATE_KEY_SIZE], own_node_id: u32, init_params: [u8; INIT_PARAMS_SIZE]) -> Result<(), StorageError> {
         self.storage.fill(0);
 
         let record = ControlPlaneData {
@@ -326,14 +304,10 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
         Ok(())
     }
 
-    fn save_block(
-        &mut self,
-        storage_index: StorageIndex,
-        block: &Block,
-    ) -> Result<(), StorageError> {
+    fn save_block(&mut self, storage_index: StorageIndex, block: &Block) -> Result<(), StorageError> {
         let (slot_start, slot_end) = Self::slot_range(storage_index)?;
 
-        let block_bytes = block.as_bytes();
+        let block_bytes = block.serialized_bytes();
         if block_bytes.len() > MAX_BLOCK_SIZE {
             return Err(StorageError::BackendIo { code: 1 });
         }
@@ -360,8 +334,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
             return Err(StorageError::ChainConfigurationAlreadySet);
         }
 
-        record.chain_configuration =
-            Some(Block::from_bytes(block.as_bytes()).map_err(|_| StorageError::BackendIo { code: 1 })?);
+        record.chain_configuration = Some(Block::from_bytes(block.serialized_bytes()).map_err(|_| StorageError::BackendIo { code: 1 })?);
 
         self.write_record_to_all_replicas(&record);
         Ok(())
@@ -399,26 +372,21 @@ mod tests {
 
     fn expected_slot_bytes(block: &Block) -> [u8; MAX_BLOCK_SIZE] {
         let mut out = [0u8; MAX_BLOCK_SIZE];
-        let bytes = block.as_bytes();
+        let bytes = block.serialized_bytes();
         out[..bytes.len()].copy_from_slice(bytes);
         out
     }
 
     fn initialized_backend<const STORAGE_SIZE: usize>() -> MemoryBackend<STORAGE_SIZE> {
         let mut backend = MemoryBackend::<STORAGE_SIZE>::new();
-        assert!(backend
-            .init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS)
-            .is_ok());
+        assert!(backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS).is_ok());
         backend
     }
 
     #[test]
     fn load_control_data_reports_uninitialized_before_init() {
         let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
-        assert!(matches!(
-            backend.load_control_data(),
-            Err(StorageError::ControlPlaneUninitialized)
-        ));
+        assert!(matches!(backend.load_control_data(), Err(StorageError::ControlPlaneUninitialized)));
     }
 
     #[test]
@@ -432,10 +400,7 @@ mod tests {
         backend.write_control_plane_entry(1, &replica);
         backend.write_control_plane_entry(2, &replica);
 
-        assert!(matches!(
-            backend.load_control_data(),
-            Err(StorageError::ControlPlaneIncompatible)
-        ));
+        assert!(matches!(backend.load_control_data(), Err(StorageError::ControlPlaneIncompatible)));
     }
 
     #[test]
@@ -444,17 +409,10 @@ mod tests {
         let block = block_from_len_and_marker(HEADER_SIZE, 1);
         assert!(backend.save_block(0, &block).is_ok());
 
-        assert!(backend
-            .init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS)
-            .is_ok());
+        assert!(backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS).is_ok());
 
         assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
-        let loaded = backend.load_control_data();
-        assert!(loaded.is_ok());
-        let loaded = match loaded {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let loaded = backend.load_control_data().unwrap();
         assert_eq!(loaded.private_key, TEST_PRIVATE_KEY);
         assert_eq!(loaded.own_node_id, TEST_NODE_ID);
         assert_eq!(loaded.init_params, TEST_INIT_PARAMS);
@@ -472,12 +430,7 @@ mod tests {
             Err(StorageError::ChainConfigurationAlreadySet)
         ));
 
-        let loaded = backend.load_control_data();
-        assert!(loaded.is_ok());
-        let loaded = match loaded {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let loaded = backend.load_control_data().unwrap();
         assert!(loaded.chain_configuration.is_some());
     }
 
@@ -490,9 +443,7 @@ mod tests {
 
         let loaded = backend.load_control_data();
         assert!(loaded.is_ok());
-        let repaired = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::deserialize_record(
-            &backend.read_control_plane_entry(1),
-        );
+        let repaired = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::deserialize_record(&backend.read_control_plane_entry(1));
         assert!(repaired.is_ok());
     }
 
@@ -503,28 +454,19 @@ mod tests {
 
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.save_block(1, &block).is_ok());
-        assert!(matches!(
-            backend.save_block(2, &block),
-            Err(StorageError::InvalidIndex)
-        ));
+        assert!(matches!(backend.save_block(2, &block), Err(StorageError::InvalidIndex)));
     }
 
     #[test]
     fn read_reports_absent_for_valid_empty_slot() {
         let backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
-        assert!(matches!(
-            backend.read_block(0),
-            Err(StorageError::BlockAbsent)
-        ));
+        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
     }
 
     #[test]
     fn read_reports_invalid_index_for_out_of_range_slot() {
         let backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
-        assert!(matches!(
-            backend.read_block(2),
-            Err(StorageError::InvalidIndex)
-        ));
+        assert!(matches!(backend.read_block(2), Err(StorageError::InvalidIndex)));
     }
 
     #[test]
@@ -533,14 +475,9 @@ mod tests {
         let block = block_from_len_and_marker(HEADER_SIZE, 1);
 
         assert!(backend.save_block(0, &block).is_ok());
-        let read_result = backend.read_block(0);
-        assert!(read_result.is_ok());
-        let read_block = match read_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let read_block = backend.read_block(0).unwrap();
         assert_eq!(read_block.len(), MAX_BLOCK_SIZE);
-        assert_eq!(read_block.as_bytes(), &expected_slot_bytes(&block));
+        assert_eq!(read_block.serialized_bytes(), &expected_slot_bytes(&block));
     }
 
     #[test]
@@ -552,10 +489,7 @@ mod tests {
             assert!(matches!(result, Err(StorageError::BlockAbsent)));
         }
 
-        assert!(matches!(
-            backend.read_block(3),
-            Err(StorageError::InvalidIndex)
-        ));
+        assert!(matches!(backend.read_block(3), Err(StorageError::InvalidIndex)));
     }
 
     #[test]
@@ -569,11 +503,8 @@ mod tests {
 
         let read_result = backend.read_block(0);
         assert!(read_result.is_ok());
-        let read_block = match read_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        assert_eq!(read_block.as_bytes(), &expected_slot_bytes(&second));
+        let read_block = read_result.unwrap();
+        assert_eq!(read_block.serialized_bytes(), &expected_slot_bytes(&second));
     }
 
     #[test]
@@ -590,17 +521,11 @@ mod tests {
         assert!(read_a.is_ok());
         assert!(read_b.is_ok());
 
-        let read_a = match read_a {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        let read_b = match read_b {
-            Ok(value) => value,
-            Err(_) => return,
-        };
+        let read_a = read_a.unwrap();
+        let read_b = read_b.unwrap();
 
-        assert_eq!(read_a.as_bytes(), &expected_slot_bytes(&block_a));
-        assert_eq!(read_b.as_bytes(), &expected_slot_bytes(&block_b));
+        assert_eq!(read_a.serialized_bytes(), &expected_slot_bytes(&block_a));
+        assert_eq!(read_b.serialized_bytes(), &expected_slot_bytes(&block_b));
     }
 
     #[test]
@@ -611,20 +536,11 @@ mod tests {
         assert!(backend.save_block(1, &block).is_ok());
         assert!(backend.save_block(3, &block).is_ok());
 
-        assert!(matches!(
-            backend.read_block(0),
-            Err(StorageError::BlockAbsent)
-        ));
+        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
         assert!(matches!(backend.read_block(1), Ok(_)));
-        assert!(matches!(
-            backend.read_block(2),
-            Err(StorageError::BlockAbsent)
-        ));
+        assert!(matches!(backend.read_block(2), Err(StorageError::BlockAbsent)));
         assert!(matches!(backend.read_block(3), Ok(_)));
-        assert!(matches!(
-            backend.read_block(4),
-            Err(StorageError::InvalidIndex)
-        ));
+        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
     }
 
     #[test]
@@ -633,14 +549,8 @@ mod tests {
         let block_a = block_from_len_and_marker(HEADER_SIZE, 8);
         let block_b = block_from_len_and_marker(HEADER_SIZE + 3, 9);
 
-        assert!(matches!(
-            backend.read_block(0),
-            Err(StorageError::BlockAbsent)
-        ));
-        assert!(matches!(
-            backend.read_block(1),
-            Err(StorageError::BlockAbsent)
-        ));
+        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
 
         assert!(backend.save_block(0, &block_a).is_ok());
         assert!(backend.save_block(2, &block_b).is_ok());
@@ -649,28 +559,13 @@ mod tests {
         let read_b = backend.read_block(2);
         assert!(read_a.is_ok());
         assert!(read_b.is_ok());
-        let read_a = match read_a {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        let read_b = match read_b {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        assert_eq!(read_a.as_bytes(), &expected_slot_bytes(&block_a));
-        assert_eq!(read_b.as_bytes(), &expected_slot_bytes(&block_b));
+        let read_a = read_a.unwrap();
+        let read_b = read_b.unwrap();
+        assert_eq!(read_a.serialized_bytes(), &expected_slot_bytes(&block_a));
+        assert_eq!(read_b.serialized_bytes(), &expected_slot_bytes(&block_b));
 
-        assert!(matches!(
-            backend.read_block(1),
-            Err(StorageError::BlockAbsent)
-        ));
-        assert!(matches!(
-            backend.save_block(4, &block_a),
-            Err(StorageError::InvalidIndex)
-        ));
-        assert!(matches!(
-            backend.read_block(4),
-            Err(StorageError::InvalidIndex)
-        ));
+        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+        assert!(matches!(backend.save_block(4, &block_a), Err(StorageError::InvalidIndex)));
+        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
     }
 }

@@ -85,7 +85,7 @@ fn main() -> ! {
     match result {
         Ok(true) => {
             led.set_high();
-            delay_ms(500);
+            delay_ms(2000);
             led.set_low();
         }
         _ => {

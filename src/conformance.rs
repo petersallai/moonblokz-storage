@@ -63,11 +63,8 @@ mod tests {
 
         let read_result = storage.read_block(0);
         assert!(read_result.is_ok());
-        let read_block = match read_result {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        assert_eq!(read_block.as_bytes(), block.as_bytes());
+        let read_block = read_result.unwrap();
+        assert_eq!(read_block.serialized_bytes(), block.serialized_bytes());
     }
 
     #[test]

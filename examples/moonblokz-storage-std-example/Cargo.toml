@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 moonblokz-storage = { path = "../../", default-features = false, features = ["backend-memory"] }
-moonblokz-chain-types = { path = "../../../moonblokz-chain-types" }
-moonblokz-crypto = { path = "../../../moonblokz-crypto-lib", default-features = false, features = ["schnorr-crypto-bigint"] }
+moonblokz-chain-types = { git = "https://github.com/petersallai/moonblokz-chain-types" }
+moonblokz-crypto = { git = "https://github.com/petersallai/moonblokz-crypto-lib", default-features = false, features = ["schnorr-crypto-bigint"] }
