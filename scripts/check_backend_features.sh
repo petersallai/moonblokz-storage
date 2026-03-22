@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-cargo check --no-default-features --features backend-memory >/dev/null
+cargo check --no-default-features --features backend-memory,schnorr >/dev/null
 
 RUST_HOST_ARCH="$(rustc -vV | awk '/host:/ {print $2}' | cut -d- -f1)"
 if [ "$RUST_HOST_ARCH" = "arm" ]; then
