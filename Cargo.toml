@@ -10,13 +10,14 @@ keywords = ["embedded", "no-std", "blockchain", "rp2040", "storage"]
 categories = ["embedded", "no-std"]
 
 [features]
-default = ["backend-memory"]
+default = ["backend-memory","schnorr"]
 backend-memory = []
 backend-rp2040 = []
+schnorr = ["moonblokz-crypto/schnorr-crypto-bigint"]
 
 [dependencies]
 moonblokz-chain-types = { git = "https://github.com/petersallai/moonblokz-chain-types" }
-moonblokz-crypto = { git = "https://github.com/petersallai/moonblokz-crypto-lib", default-features = false, features = ["schnorr-crypto-bigint"] }
+moonblokz-crypto = { git = "https://github.com/petersallai/moonblokz-crypto-lib", default-features = false}
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }
