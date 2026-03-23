@@ -106,6 +106,31 @@ mod tests {
     }
 
     #[test]
+    fn conformance_capacity_boundary_reports_invalid_index_at_upper_bound() {
+        let mut storage = new_backend();
+        assert!(storage
+            .init(
+                [1u8; PRIVATE_KEY_SIZE],
+                1,
+                [0u8; crate::INIT_PARAMS_SIZE],
+            )
+            .is_ok());
+
+        let capacity = storage.capacity();
+        assert!(capacity > 0);
+
+        let block = block_from_marker(45);
+        assert!(matches!(
+            storage.read_block(capacity),
+            Err(StorageError::InvalidIndex)
+        ));
+        assert!(matches!(
+            storage.save_block(capacity, &block),
+            Err(StorageError::InvalidIndex)
+        ));
+    }
+
+    #[test]
     fn conformance_startup_scan_returns_typed_outcomes_for_mixed_slots() {
         let mut storage = new_backend();
         assert!(storage

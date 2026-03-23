@@ -49,6 +49,11 @@ fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
         Err(err) => return Err(err),
     }
 
+    let capacity = storage.capacity();
+    if capacity == 0 || EXAMPLE_STORAGE_INDEX >= capacity {
+        return Err(StorageError::InvalidIndex);
+    }
+
     let block = make_example_block()?;
     storage.save_block(EXAMPLE_STORAGE_INDEX, &block)?;
     let loaded = storage.read_block(EXAMPLE_STORAGE_INDEX)?;
