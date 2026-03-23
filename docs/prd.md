@@ -173,7 +173,7 @@ The value moment is operational clarity: failures are diagnosable, and nodes do 
 
 A Backend Implementer wants to bring MoonBlokz storage semantics to new hardware after RP2040 MVP. They implement the same storage API contract and preserve deterministic index mapping, read-time hash verification, and explicit error behavior.
 
-They validate conformance against capacity and integrity expectations, ensuring behavior parity with RP2040 semantics rather than hardware-specific ad hoc behavior. Integration tests confirm that chain/runtime code can run unchanged while backend implementation differs.
+They validate conformance against shared public API expectations (including `capacity()`), while honoring backend-specific integrity expectations. RP2040 enforces read-time hash verification; the in-memory backend is for happy-path/off-target use and does not claim full RP2040 integrity-enforcement parity. Integration tests confirm that chain/runtime code can run unchanged while backend implementation differs.
 
 The value climax is successful backend substitution without changing chain-level storage expectations. The resolution is a portable multi-backend storage ecosystem with consistent semantics.
 
@@ -228,11 +228,11 @@ The journeys reveal required capability areas:
 - **Risk:** Partial writes produce invalid block state.
   - **Mitigation:** detect on read/startup, return explicit error, let chain logic decide recovery.
 - **Risk:** Testing becomes blocked by RP2040 hardware dependence.
-  - **Mitigation:** implement a dummy in-memory test storage backend with identical API semantics for off-target blockchain testing.
+  - **Mitigation:** implement a dummy in-memory storage backend for happy-path/off-target blockchain testing; keep public API shape aligned while not requiring full RP2040 integrity-enforcement parity.
 - **Risk:** Storage/chain responsibility drift creates ambiguous behavior.
   - **Mitigation:** enforce API boundary and responsibility matrix with contract tests.
 - **Risk:** Backend-specific divergence breaks semantic portability.
-  - **Mitigation:** conformance tests for deterministic index mapping and integrity behavior across backends.
+  - **Mitigation:** conformance tests for deterministic index mapping and public API behavior (including `capacity()`) across backends, with backend-specific integrity expectations documented explicitly.
 
 ## Project-Type Requirements
 
@@ -308,7 +308,7 @@ The MVP is explicitly scoped to unblock MoonBlokz operational viability on const
 - Read-time hash verification before returning block data.
 - Explicit error signaling for invalid/partial/corrupt reads.
 - Startup-compatible block loading behavior for chain initialization.
-- Dummy in-memory storage backend for off-target blockchain testing.
+- Dummy in-memory storage backend for happy-path/off-target blockchain testing (no full RP2040 integrity-enforcement parity claim).
 - Separate blockchain types crate with block data structure definition and clear boundary to storage crate.
 - Mandatory developer documentation:
   - file-level block comments
@@ -342,7 +342,7 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 - FR1: MoonBlokz Chain Runtime can initialize storage on supported backend devices.
 - FR2: MoonBlokz Chain Runtime can perform startup loading by iterating through storage indexes and reading blocks for reconstruction.
 - FR3: MoonBlokz Chain Runtime can detect whether storage state is usable for chain reconstruction.
-- FR4: MoonBlokz Chain Runtime can retrieve storage capacity boundaries derived from configured block sizing constraints.
+- FR4: MoonBlokz Chain Runtime can retrieve storage capacity boundaries through a public `capacity()` API derived from configured block sizing constraints.
 - FR5: MoonBlokz Chain Runtime can determine availability of indexed storage slots.
 
 ### Control Plane Management
@@ -361,7 +361,7 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 - FR17: Storage can read control-plane replicas in deterministic order, validate CRC32, return the first valid instance, and continue scanning on checksum failure.
 - FR18: Storage can attempt best-effort repair of failed control-plane replicas after reading one valid replica.
 - FR19: Storage can place control-plane replicas at the start of storage region (`data_storage_start_address`) and map block-storage addresses after the reserved control-plane area.
-- FR20: Storage can calculate block-storage slot capacity from remaining storage after subtracting reserved replicated control-plane pages.
+- FR20: Storage can calculate block-storage slot capacity from remaining storage after subtracting reserved replicated control-plane pages and expose it through the public `capacity()` API.
 
 ### Indexed Persistence & Retrieval
 
@@ -373,11 +373,11 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 
 ### Integrity & Error Semantics
 
-- FR26: Storage can recompute and verify block hash integrity on retrieval before returning block data.
-- FR27: Storage can return explicit integrity errors when computed and stored block hashes differ.
+- FR26: RP2040 backend can recompute and verify block hash integrity on retrieval before returning block data.
+- FR27: RP2040 backend can return explicit integrity errors when computed and stored block hashes differ.
 - FR28: Storage can detect partial or invalid write artifacts during subsequent read/startup operations.
 - FR29: Storage can surface explicit error categories suitable for chain-level recovery decisions.
-- FR30: Storage can avoid returning data that fails integrity validation.
+- FR30: RP2040 backend can avoid returning data that fails integrity validation.
 
 ### Chain Integration Contract
 
@@ -392,7 +392,7 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 - FR36: Storage can expose a backend-agnostic interface supporting multiple device implementations.
 - FR37: Storage Backend Implementer can implement a new hardware backend without changing chain-level storage semantics.
 - FR38: Storage can provide an RP2040 backend implementation for MVP usage.
-- FR39: Storage can provide an in-memory backend implementation for off-target blockchain testing.
+- FR39: Storage can provide an in-memory backend implementation for happy-path/off-target blockchain testing and development flows without claiming full RP2040 integrity-enforcement parity.
 - FR40: Storage can support conformance validation of backend implementations against shared API semantics.
 
 ### Blockchain Types Boundary
@@ -427,8 +427,8 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 
 ### Security
 
-- NFR4: Storage shall enforce integrity-focused behavior by validating block hash consistency on retrieval paths.
-- NFR5: Storage shall never return data that fails integrity validation.
+- NFR4: RP2040 backend shall enforce integrity-focused behavior by validating block hash consistency on retrieval paths.
+- NFR5: RP2040 backend shall never return data that fails integrity validation; in-memory backend remains a happy-path/off-target backend and is not required to provide full RP2040 integrity-enforcement parity.
 - NFR6: Encryption requirements are out of scope for this storage layer; security focus is integration-safe integrity handling.
 
 ### Reliability
@@ -446,7 +446,7 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 - NFR14: Public storage interfaces shall remain Rust `no_std` and synchronous.
 - NFR15: Although async storage techniques (for example DMA-enabled approaches) may exist, this product shall intentionally use synchronous APIs because RP2040 XIP flash operations block both cores.
 - NFR16: Storage shall preserve strict architectural boundaries with chain logic and blockchain types crate responsibilities.
-- NFR17: RP2040 and non-RP2040 backend implementations (including in-memory test backend) shall preserve consistent API semantics and behavioral contracts.
+- NFR17: RP2040 and non-RP2040 backend implementations (including in-memory test backend) shall preserve consistent public API semantics (including `capacity()`), with backend-specific integrity-enforcement behavior documented explicitly.
 
 ### Implementation Simplicity
 

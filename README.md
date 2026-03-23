@@ -101,8 +101,18 @@ persistence/retrieval, and control-plane management:
 - `init(private_key, own_node_id, init_params)`
 - `save_block(storage_index, block)`
 - `read_block(storage_index)`
+- `capacity()`
 - `set_chain_configuration(block)`
 - `load_control_data()`
+
+Minimal index-boundary usage:
+
+```rust
+let capacity = storage.capacity();
+if storage_index >= capacity {
+    return Err(StorageError::InvalidIndex);
+}
+```
 
 `load_control_data()` returns `ControlPlaneData` with:
 
