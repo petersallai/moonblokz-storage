@@ -118,6 +118,9 @@ pub trait StorageTrait {
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
+    ///     fn capacity(&self) -> u32 {
+    ///         1
+    ///     }
     ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
@@ -163,6 +166,9 @@ pub trait StorageTrait {
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
+    ///     fn capacity(&self) -> u32 {
+    ///         1
+    ///     }
     ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
@@ -206,6 +212,9 @@ pub trait StorageTrait {
     ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
+    ///     fn capacity(&self) -> u32 {
+    ///         1
+    ///     }
     ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
@@ -219,6 +228,46 @@ pub trait StorageTrait {
     /// assert!(matches!(result, Err(StorageError::BlockAbsent)));
     /// ```
     fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError>;
+
+    /// Returns deterministic storage slot capacity (`storage_index` upper bound).
+    ///
+    /// Parameters:
+    /// - none.
+    ///
+    /// Example:
+    /// ```
+    /// use moonblokz_storage::{StorageError, StorageTrait};
+    ///
+    /// struct DummyStorage;
+    ///
+    /// impl StorageTrait for DummyStorage {
+    ///     fn init(
+    ///         &mut self,
+    ///         _private_key: [u8; moonblokz_crypto::PRIVATE_KEY_SIZE],
+    ///         _own_node_id: u32,
+    ///         _init_params: [u8; moonblokz_storage::INIT_PARAMS_SIZE],
+    ///     ) -> Result<(), StorageError> { Ok(()) }
+    ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
+    ///         Ok(())
+    ///     }
+    ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
+    ///         Err(StorageError::BlockAbsent)
+    ///     }
+    ///     fn capacity(&self) -> u32 {
+    ///         4
+    ///     }
+    ///     fn set_chain_configuration(&mut self, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
+    ///         Ok(())
+    ///     }
+    ///     fn load_control_data(&mut self) -> Result<moonblokz_storage::ControlPlaneData, StorageError> {
+    ///         Err(StorageError::ControlPlaneUninitialized)
+    ///     }
+    /// }
+    ///
+    /// let storage = DummyStorage;
+    /// assert_eq!(storage.capacity(), 4);
+    /// ```
+    fn capacity(&self) -> StorageIndex;
 
     /// Persists the chain-configuration block once after initialization.
     ///

@@ -328,6 +328,10 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
         Block::from_bytes(slot).map_err(|_| StorageError::BackendIo { code: 2 })
     }
 
+    fn capacity(&self) -> StorageIndex {
+        Self::MAX_STORAGE_SLOTS
+    }
+
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
         let mut record = self.load_primary_record_and_repair()?;
         if record.chain_configuration.is_some() {
@@ -455,6 +459,12 @@ mod tests {
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.save_block(1, &block).is_ok());
         assert!(matches!(backend.save_block(2, &block), Err(StorageError::InvalidIndex)));
+    }
+
+    #[test]
+    fn capacity_returns_slot_count() {
+        let backend = initialized_backend::<TEST_STORAGE_SIZE_3_SLOTS>();
+        assert_eq!(backend.capacity(), 3);
     }
 
     #[test]
