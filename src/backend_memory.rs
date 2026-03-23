@@ -103,6 +103,13 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         replica_index * CONTROL_PLANE_ENTRY_SIZE
     }
 
+    fn validate_control_plane_capacity() -> Result<(), StorageError> {
+        if STORAGE_SIZE < CONTROL_PLANE_RESERVED_BYTES {
+            return Err(StorageError::InvalidConfiguration);
+        }
+        Ok(())
+    }
+
     fn read_control_plane_entry(&self, replica_index: usize) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
         let start = Self::control_plane_entry_offset(replica_index);
         let end = start + CONTROL_PLANE_ENTRY_SIZE;
@@ -221,6 +228,8 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
     }
 
     fn load_primary_record_and_repair(&mut self) -> Result<ControlPlaneData, StorageError> {
+        Self::validate_control_plane_capacity()?;
+
         let mut first_valid_index: Option<usize> = None;
         let mut first_valid_record: Option<ControlPlaneData> = None;
         let mut invalid_indexes = [usize::MAX; CONTROL_PLANE_COUNT];
@@ -282,16 +291,19 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         Ok(record)
     }
 
-    fn write_record_to_all_replicas(&mut self, record: &ControlPlaneData) {
+    fn write_record_to_all_replicas(&mut self, record: &ControlPlaneData) -> Result<(), StorageError> {
+        Self::validate_control_plane_capacity()?;
         let encoded = Self::serialize_record(record);
         for index in 0..CONTROL_PLANE_COUNT {
             self.write_control_plane_entry(index, &encoded);
         }
+        Ok(())
     }
 }
 
 impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
     fn init(&mut self, private_key: [u8; PRIVATE_KEY_SIZE], own_node_id: u32, init_params: [u8; INIT_PARAMS_SIZE]) -> Result<(), StorageError> {
+        Self::validate_control_plane_capacity()?;
         self.storage.fill(0);
 
         let record = ControlPlaneData {
@@ -300,7 +312,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
             init_params,
             chain_configuration: None,
         };
-        self.write_record_to_all_replicas(&record);
+        self.write_record_to_all_replicas(&record)?;
         Ok(())
     }
 
@@ -340,7 +352,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
 
         record.chain_configuration = Some(Block::from_bytes(block.serialized_bytes()).map_err(|_| StorageError::BackendIo { code: 1 })?);
 
-        self.write_record_to_all_replicas(&record);
+        self.write_record_to_all_replicas(&record)?;
         Ok(())
     }
 
@@ -362,6 +374,7 @@ mod tests {
     const TEST_STORAGE_SIZE_2_SLOTS: usize = CONTROL_PLANE_RESERVED_BYTES + (2 * MAX_BLOCK_SIZE);
     const TEST_STORAGE_SIZE_3_SLOTS: usize = CONTROL_PLANE_RESERVED_BYTES + (3 * MAX_BLOCK_SIZE);
     const TEST_STORAGE_SIZE_4_SLOTS: usize = CONTROL_PLANE_RESERVED_BYTES + (4 * MAX_BLOCK_SIZE);
+    const TEST_STORAGE_SIZE_UNDERSIZED: usize = CONTROL_PLANE_RESERVED_BYTES - 1;
 
     fn block_from_len_and_marker(len: usize, marker: u8) -> Block {
         let mut bytes = [0u8; HEADER_SIZE + 8];
@@ -391,6 +404,21 @@ mod tests {
     fn load_control_data_reports_uninitialized_before_init() {
         let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
         assert!(matches!(backend.load_control_data(), Err(StorageError::ControlPlaneUninitialized)));
+    }
+
+    #[test]
+    fn load_control_data_returns_invalid_configuration_for_undersized_uninitialized_storage() {
+        let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_UNDERSIZED>::new();
+        assert!(matches!(backend.load_control_data(), Err(StorageError::InvalidConfiguration)));
+    }
+
+    #[test]
+    fn init_returns_invalid_configuration_for_undersized_storage() {
+        let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_UNDERSIZED>::new();
+        assert!(matches!(
+            backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS),
+            Err(StorageError::InvalidConfiguration)
+        ));
     }
 
     #[test]
