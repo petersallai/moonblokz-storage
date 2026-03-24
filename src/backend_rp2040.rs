@@ -633,6 +633,10 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
         self.read_slot(&mapping)
     }
 
+    fn capacity(&self) -> StorageIndex {
+        self.max_storage_slots
+    }
+
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
         let mut record = self.load_primary_control_record_and_repair()?;
         if record.chain_configuration.is_some() {
@@ -723,6 +727,12 @@ mod tests {
     fn new_calculates_max_slots_from_storage_geometry() {
         let backend = Rp2040Backend::<TEST_FLASH_THREE_BLOCK_PAGES>::new_for_tests(FLASH_PAGE_SIZE).unwrap_or_else(|_| unreachable!());
         assert_eq!(backend.max_storage_slots, (2 * BLOCKS_PER_PAGE) as StorageIndex);
+    }
+
+    #[test]
+    fn capacity_reports_slot_count() {
+        let backend = Rp2040Backend::<TEST_FLASH_THREE_BLOCK_PAGES>::new_for_tests(FLASH_PAGE_SIZE).unwrap_or_else(|_| unreachable!());
+        assert_eq!(backend.capacity(), (2 * BLOCKS_PER_PAGE) as StorageIndex);
     }
 
     #[test]
