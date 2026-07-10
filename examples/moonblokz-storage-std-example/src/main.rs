@@ -8,7 +8,7 @@ This example demonstrates:
 */
 
 use moonblokz_chain_types::{Block, BlockBuilder, BlockHeader};
-use moonblokz_crypto::PRIVATE_KEY_SIZE;
+use moonblokz_crypto::{Crypto, CryptoTrait, PRIVATE_KEY_SIZE};
 use moonblokz_storage::{INIT_PARAMS_SIZE, MemoryBackend, StorageError, StorageTrait};
 
 const STORAGE_SIZE: usize = 64 * 1024;
@@ -28,12 +28,27 @@ fn make_example_block() -> Result<Block, StorageError> {
         signature: [1u8; 64],
     };
 
-    let builder = BlockBuilder::new()
-        .header(header)
-        .payload(&[1u8, 2u8, 3u8, 4u8])
-        .map_err(|_| StorageError::BackendIo { code: 240 })?;
+    let crypto = Crypto::new([7u8; PRIVATE_KEY_SIZE])
+        .map_err(|_| StorageError::BackendIo { code: 239 })?;
 
-    builder.build().map_err(|_| StorageError::BackendIo { code: 241 })
+    BlockBuilder::new()
+        .header(header)
+        .build_signed(&crypto)
+        .map_err(|_| StorageError::BackendIo { code: 241 })
+}
+
+fn block_round_tripped(expected: &Block, actual: &Block) -> bool {
+    let expected_bytes = expected.serialized_bytes();
+    let actual_bytes = actual.serialized_bytes();
+    if actual_bytes.len() < expected_bytes.len() {
+        return false;
+    }
+    if &actual_bytes[..expected_bytes.len()] != expected_bytes {
+        return false;
+    }
+    actual_bytes[expected_bytes.len()..]
+        .iter()
+        .all(|value| *value == 0)
 }
 
 fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
@@ -57,14 +72,7 @@ fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
     let block = make_example_block()?;
     storage.save_block(EXAMPLE_STORAGE_INDEX, &block)?;
     let loaded = storage.read_block(EXAMPLE_STORAGE_INDEX)?;
-    let expected = block.header();
-    let actual = loaded.header();
-    Ok(
-        expected.version == actual.version
-            && expected.sequence == actual.sequence
-            && expected.creator == actual.creator
-            && expected.payload_type == actual.payload_type,
-    )
+    Ok(block_round_tripped(&block, &loaded))
 }
 
 fn main() {

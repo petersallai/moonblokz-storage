@@ -1,6 +1,9 @@
 /*! In-memory backend module for MoonBlokz storage contract testing/integration. */
 
-use crate::{CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError, StorageIndex, StorageTrait};
+use crate::{
+    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
+    StorageIndex, StorageTrait,
+};
 use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
@@ -86,7 +89,9 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
     /// let _backend = MemoryBackend::<{ 8 * MAX_BLOCK_SIZE + 8000 }>::new();
     /// ```
     pub fn new() -> Self {
-        Self { storage: [0u8; STORAGE_SIZE] }
+        Self {
+            storage: [0u8; STORAGE_SIZE],
+        }
     }
 
     fn slot_range(storage_index: StorageIndex) -> Result<(usize, usize), StorageError> {
@@ -118,7 +123,11 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out
     }
 
-    fn write_control_plane_entry(&mut self, replica_index: usize, entry: &[u8; CONTROL_PLANE_ENTRY_SIZE]) {
+    fn write_control_plane_entry(
+        &mut self,
+        replica_index: usize,
+        entry: &[u8; CONTROL_PLANE_ENTRY_SIZE],
+    ) {
         let start = Self::control_plane_entry_offset(replica_index);
         let end = start + CONTROL_PLANE_ENTRY_SIZE;
         self.storage[start..end].copy_from_slice(entry);
@@ -147,17 +156,21 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         // Intentional truncation: PRIVATE_KEY_SIZE is guaranteed <= 255 by the
         // control-plane schema.
         out[PRIVATE_KEY_SIZE_OFFSET] = PRIVATE_KEY_SIZE as u8;
-        out[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE].copy_from_slice(&record.private_key);
-        out[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4].copy_from_slice(&record.own_node_id.to_le_bytes());
+        out[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]
+            .copy_from_slice(&record.private_key);
+        out[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4]
+            .copy_from_slice(&record.own_node_id.to_le_bytes());
         // Intentional truncation: INIT_PARAMS_SIZE is guaranteed <= 255 by the
         // control-plane schema.
         out[INIT_PARAMS_SIZE_OFFSET] = INIT_PARAMS_SIZE as u8;
-        out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE].copy_from_slice(&record.init_params);
+        out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
+            .copy_from_slice(&record.init_params);
 
         // Intentional truncation: MAX_BLOCK_SIZE is guaranteed <= 65535 by the
         // control-plane schema.
         let max_block_size_u16 = MAX_BLOCK_SIZE as u16;
-        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2].copy_from_slice(&max_block_size_u16.to_le_bytes());
+        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]
+            .copy_from_slice(&max_block_size_u16.to_le_bytes());
 
         if let Some(chain_configuration) = &record.chain_configuration {
             let bytes = chain_configuration.serialized_bytes();
@@ -169,7 +182,9 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out
     }
 
-    fn deserialize_record(bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE]) -> Result<ControlPlaneData, StorageError> {
+    fn deserialize_record(
+        bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
+    ) -> Result<ControlPlaneData, StorageError> {
         if bytes.iter().all(|value| *value == 0) {
             return Err(StorageError::ControlPlaneUninitialized);
         }
@@ -195,27 +210,31 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         }
 
         let mut max_block_size_bytes = [0u8; 2];
-        max_block_size_bytes.copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]);
+        max_block_size_bytes
+            .copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]);
         let persisted_max_block_size = u16::from_le_bytes(max_block_size_bytes) as usize;
         if persisted_max_block_size != MAX_BLOCK_SIZE {
             return Err(StorageError::ControlPlaneIncompatible);
         }
 
         let mut private_key = [0u8; PRIVATE_KEY_SIZE];
-        private_key.copy_from_slice(&bytes[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]);
+        private_key
+            .copy_from_slice(&bytes[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]);
 
         let mut own_node_id_bytes = [0u8; 4];
         own_node_id_bytes.copy_from_slice(&bytes[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4]);
         let own_node_id = u32::from_le_bytes(own_node_id_bytes);
 
         let mut init_params = [0u8; INIT_PARAMS_SIZE];
-        init_params.copy_from_slice(&bytes[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]);
+        init_params
+            .copy_from_slice(&bytes[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]);
 
         let chain_configuration = if bytes[CHAIN_CONFIG_OFFSET] == 0 {
             None
         } else {
             let mut value = [0u8; MAX_BLOCK_SIZE];
-            value.copy_from_slice(&bytes[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE]);
+            value
+                .copy_from_slice(&bytes[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE]);
             Some(Block::from_bytes(&value).map_err(|_| StorageError::ControlPlaneCorrupted)?)
         };
 
@@ -291,7 +310,10 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         Ok(record)
     }
 
-    fn write_record_to_all_replicas(&mut self, record: &ControlPlaneData) -> Result<(), StorageError> {
+    fn write_record_to_all_replicas(
+        &mut self,
+        record: &ControlPlaneData,
+    ) -> Result<(), StorageError> {
         Self::validate_control_plane_capacity()?;
         let encoded = Self::serialize_record(record);
         for index in 0..CONTROL_PLANE_COUNT {
@@ -302,7 +324,12 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
 }
 
 impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
-    fn init(&mut self, private_key: [u8; PRIVATE_KEY_SIZE], own_node_id: u32, init_params: [u8; INIT_PARAMS_SIZE]) -> Result<(), StorageError> {
+    fn init(
+        &mut self,
+        private_key: [u8; PRIVATE_KEY_SIZE],
+        own_node_id: u32,
+        init_params: [u8; INIT_PARAMS_SIZE],
+    ) -> Result<(), StorageError> {
         Self::validate_control_plane_capacity()?;
         self.storage.fill(0);
 
@@ -316,7 +343,11 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
         Ok(())
     }
 
-    fn save_block(&mut self, storage_index: StorageIndex, block: &Block) -> Result<(), StorageError> {
+    fn save_block(
+        &mut self,
+        storage_index: StorageIndex,
+        block: &Block,
+    ) -> Result<(), StorageError> {
         let (slot_start, slot_end) = Self::slot_range(storage_index)?;
 
         let block_bytes = block.serialized_bytes();
@@ -350,7 +381,10 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
             return Err(StorageError::ChainConfigurationAlreadySet);
         }
 
-        record.chain_configuration = Some(Block::from_bytes(block.serialized_bytes()).map_err(|_| StorageError::BackendIo { code: 1 })?);
+        record.chain_configuration = Some(
+            Block::from_bytes(block.serialized_bytes())
+                .map_err(|_| StorageError::BackendIo { code: 1 })?,
+        );
 
         self.write_record_to_all_replicas(&record)?;
         Ok(())
@@ -396,20 +430,30 @@ mod tests {
 
     fn initialized_backend<const STORAGE_SIZE: usize>() -> MemoryBackend<STORAGE_SIZE> {
         let mut backend = MemoryBackend::<STORAGE_SIZE>::new();
-        assert!(backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS).is_ok());
+        assert!(
+            backend
+                .init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS)
+                .is_ok()
+        );
         backend
     }
 
     #[test]
     fn load_control_data_reports_uninitialized_before_init() {
         let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
-        assert!(matches!(backend.load_control_data(), Err(StorageError::ControlPlaneUninitialized)));
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneUninitialized)
+        ));
     }
 
     #[test]
     fn load_control_data_returns_invalid_configuration_for_undersized_uninitialized_storage() {
         let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_UNDERSIZED>::new();
-        assert!(matches!(backend.load_control_data(), Err(StorageError::InvalidConfiguration)));
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::InvalidConfiguration)
+        ));
     }
 
     #[test]
@@ -426,13 +470,17 @@ mod tests {
         let mut backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
         let mut replica = backend.read_control_plane_entry(0);
         replica[VERSION_OFFSET] = CONTROL_PLANE_VERSION.wrapping_add(1);
-        let crc = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::crc32(&replica[..CONTROL_CRC32_OFFSET]);
+        let crc =
+            MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::crc32(&replica[..CONTROL_CRC32_OFFSET]);
         replica[CONTROL_CRC32_OFFSET..CONTROL_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
         backend.write_control_plane_entry(0, &replica);
         backend.write_control_plane_entry(1, &replica);
         backend.write_control_plane_entry(2, &replica);
 
-        assert!(matches!(backend.load_control_data(), Err(StorageError::ControlPlaneIncompatible)));
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneIncompatible)
+        ));
     }
 
     #[test]
@@ -441,9 +489,16 @@ mod tests {
         let block = block_from_len_and_marker(HEADER_SIZE, 1);
         assert!(backend.save_block(0, &block).is_ok());
 
-        assert!(backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS).is_ok());
+        assert!(
+            backend
+                .init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS)
+                .is_ok()
+        );
 
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
         let loaded = backend.load_control_data().unwrap();
         assert_eq!(loaded.private_key, TEST_PRIVATE_KEY);
         assert_eq!(loaded.own_node_id, TEST_NODE_ID);
@@ -475,7 +530,9 @@ mod tests {
 
         let loaded = backend.load_control_data();
         assert!(loaded.is_ok());
-        let repaired = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::deserialize_record(&backend.read_control_plane_entry(1));
+        let repaired = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::deserialize_record(
+            &backend.read_control_plane_entry(1),
+        );
         assert!(repaired.is_ok());
     }
 
@@ -486,7 +543,10 @@ mod tests {
 
         assert!(backend.save_block(0, &block).is_ok());
         assert!(backend.save_block(1, &block).is_ok());
-        assert!(matches!(backend.save_block(2, &block), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.save_block(2, &block),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 
     #[test]
@@ -498,13 +558,19 @@ mod tests {
     #[test]
     fn read_reports_absent_for_valid_empty_slot() {
         let backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
     }
 
     #[test]
     fn read_reports_invalid_index_for_out_of_range_slot() {
         let backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
-        assert!(matches!(backend.read_block(2), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(2),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 
     #[test]
@@ -527,7 +593,10 @@ mod tests {
             assert!(matches!(result, Err(StorageError::BlockAbsent)));
         }
 
-        assert!(matches!(backend.read_block(3), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(3),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 
     #[test]
@@ -574,11 +643,20 @@ mod tests {
         assert!(backend.save_block(1, &block).is_ok());
         assert!(backend.save_block(3, &block).is_ok());
 
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
         assert!(matches!(backend.read_block(1), Ok(_)));
-        assert!(matches!(backend.read_block(2), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(2),
+            Err(StorageError::BlockAbsent)
+        ));
         assert!(matches!(backend.read_block(3), Ok(_)));
-        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(4),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 
     #[test]
@@ -587,8 +665,14 @@ mod tests {
         let block_a = block_from_len_and_marker(HEADER_SIZE, 8);
         let block_b = block_from_len_and_marker(HEADER_SIZE + 3, 9);
 
-        assert!(matches!(backend.read_block(0), Err(StorageError::BlockAbsent)));
-        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
+        assert!(matches!(
+            backend.read_block(0),
+            Err(StorageError::BlockAbsent)
+        ));
+        assert!(matches!(
+            backend.read_block(1),
+            Err(StorageError::BlockAbsent)
+        ));
 
         assert!(backend.save_block(0, &block_a).is_ok());
         assert!(backend.save_block(2, &block_b).is_ok());
@@ -602,8 +686,17 @@ mod tests {
         assert_eq!(read_a.serialized_bytes(), &expected_slot_bytes(&block_a));
         assert_eq!(read_b.serialized_bytes(), &expected_slot_bytes(&block_b));
 
-        assert!(matches!(backend.read_block(1), Err(StorageError::BlockAbsent)));
-        assert!(matches!(backend.save_block(4, &block_a), Err(StorageError::InvalidIndex)));
-        assert!(matches!(backend.read_block(4), Err(StorageError::InvalidIndex)));
+        assert!(matches!(
+            backend.read_block(1),
+            Err(StorageError::BlockAbsent)
+        ));
+        assert!(matches!(
+            backend.save_block(4, &block_a),
+            Err(StorageError::InvalidIndex)
+        ));
+        assert!(matches!(
+            backend.read_block(4),
+            Err(StorageError::InvalidIndex)
+        ));
     }
 }

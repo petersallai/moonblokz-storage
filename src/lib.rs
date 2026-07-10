@@ -136,7 +136,12 @@ pub trait StorageTrait {
     ///     [0u8; moonblokz_storage::INIT_PARAMS_SIZE]
     /// ).is_ok());
     /// ```
-    fn init(&mut self, private_key: [u8; PRIVATE_KEY_SIZE], own_node_id: u32, init_params: [u8; INIT_PARAMS_SIZE]) -> Result<(), StorageError>;
+    fn init(
+        &mut self,
+        private_key: [u8; PRIVATE_KEY_SIZE],
+        own_node_id: u32,
+        init_params: [u8; INIT_PARAMS_SIZE],
+    ) -> Result<(), StorageError>;
 
     /// Persists a block at a specific `storage_index`.
     ///
@@ -186,7 +191,11 @@ pub trait StorageTrait {
     /// };
     /// assert!(storage.save_block(0, &block).is_ok());
     /// ```
-    fn save_block(&mut self, storage_index: StorageIndex, block: &Block) -> Result<(), StorageError>;
+    fn save_block(
+        &mut self,
+        storage_index: StorageIndex,
+        block: &Block,
+    ) -> Result<(), StorageError>;
 
     /// Reads and returns a block from a specific `storage_index`.
     ///
