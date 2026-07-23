@@ -10,14 +10,21 @@ keywords = ["embedded", "no-std", "blockchain", "rp2040", "storage"]
 categories = ["embedded", "no-std"]
 
 [features]
-default = ["backend-memory","schnorr"]
+default = ["backend-memory", "schnorr-crypto-bigint"]
 backend-memory = []
 backend-rp2040 = []
-schnorr = ["moonblokz-crypto/schnorr-crypto-bigint"]
+# Crypto backend forwarding — the backend is NOT baked in here. Choose exactly
+# one; it is forwarded to both chain-types and crypto (no storage src gates on
+# the backend, so these are pure forwards). The default is the embedded-oriented
+# crypto-bigint backend; a consumer overrides via `default-features = false` +
+# an alternate backend feature.
+schnorr-crypto-bigint = ["moonblokz-chain-types/schnorr-crypto-bigint", "moonblokz-crypto/schnorr-crypto-bigint"]
+schnorr-malachite = ["moonblokz-chain-types/schnorr-malachite", "moonblokz-crypto/schnorr-malachite"]
+schnorr-num-bigint-dig = ["moonblokz-chain-types/schnorr-num-bigint-dig", "moonblokz-crypto/schnorr-num-bigint-dig"]
 
 [dependencies]
-moonblokz-chain-types = { path = "../moonblokz-chain-types" }
-moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false}
+moonblokz-chain-types = { path = "../moonblokz-chain-types", default-features = false }
+moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }
