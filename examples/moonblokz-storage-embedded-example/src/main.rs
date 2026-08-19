@@ -37,8 +37,8 @@ fn make_example_block() -> Result<Block, StorageError> {
         signature: [1u8; 64],
     };
 
-    let crypto = Crypto::new([7u8; PRIVATE_KEY_SIZE])
-        .map_err(|_| StorageError::BackendIo { code: 239 })?;
+    let crypto =
+        Crypto::new([7u8; PRIVATE_KEY_SIZE]).map_err(|_| StorageError::BackendIo { code: 239 })?;
 
     BlockBuilder::new()
         .header(header)
@@ -87,7 +87,8 @@ fn main() -> ! {
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
 
-    let result = match Rp2040Backend::<RP2040_FLASH_SIZE>::new(p.FLASH, DATA_STORAGE_START_ADDRESS) {
+    let result = match Rp2040Backend::<RP2040_FLASH_SIZE>::new(p.FLASH, DATA_STORAGE_START_ADDRESS)
+    {
         Ok(mut storage) => run_flow(&mut storage),
         Err(err) => Err(err),
     };
