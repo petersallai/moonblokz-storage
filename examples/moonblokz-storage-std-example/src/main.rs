@@ -28,8 +28,8 @@ fn make_example_block() -> Result<Block, StorageError> {
         signature: [1u8; 64],
     };
 
-    let crypto = Crypto::new([7u8; PRIVATE_KEY_SIZE])
-        .map_err(|_| StorageError::BackendIo { code: 239 })?;
+    let crypto =
+        Crypto::new([7u8; PRIVATE_KEY_SIZE]).map_err(|_| StorageError::BackendIo { code: 239 })?;
 
     BlockBuilder::new()
         .header(header)
@@ -55,11 +55,7 @@ fn run_flow(storage: &mut impl StorageTrait) -> Result<bool, StorageError> {
     match storage.load_control_data() {
         Ok(_) => {}
         Err(StorageError::ControlPlaneUninitialized) => {
-            storage.init(
-                [7u8; PRIVATE_KEY_SIZE],
-                1001,
-                [9u8; INIT_PARAMS_SIZE],
-            )?;
+            storage.init([7u8; PRIVATE_KEY_SIZE], 1001, [9u8; INIT_PARAMS_SIZE])?;
         }
         Err(err) => return Err(err),
     }
