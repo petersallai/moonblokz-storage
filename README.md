@@ -46,12 +46,12 @@ Release expectations for crates.io phase:
 
 ## Backend Feature Selection
 
-Exactly one backend feature must be enabled at compile time:
+At most one backend feature may be enabled at compile time:
 
 - `backend-memory`
 - `backend-rp2040`
 
-Default feature is `backend-memory`.
+Default feature is `backend-memory`. A crate that only consumes `StorageTrait` (such as `moonblokz-blockchain`) enables **none**, so the backend is chosen once, by the final binary — the node firmware selects `backend-rp2040`, a host test or simulator selects `backend-memory`. A library that picked one would unify with, and collide with, the binary's choice.
 
 ### Examples
 
