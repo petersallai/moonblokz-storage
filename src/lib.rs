@@ -16,11 +16,11 @@ pub mod backend_memory;
 #[cfg(feature = "backend-rp2040")]
 pub mod backend_rp2040;
 
-#[cfg(not(any(feature = "backend-memory", feature = "backend-rp2040")))]
-compile_error!("Exactly one backend feature must be enabled: backend-memory or backend-rp2040.");
-
+// At most one backend. None is legal: a crate that only consumes `StorageTrait`
+// (the blockchain) must not choose one, or its choice would unify with — and
+// collide with — the backend the final binary selects.
 #[cfg(all(feature = "backend-memory", feature = "backend-rp2040"))]
-compile_error!("Exactly one backend feature must be enabled: backend-memory or backend-rp2040.");
+compile_error!("At most one backend feature may be enabled: backend-memory or backend-rp2040.");
 
 use moonblokz_chain_types::Block;
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
