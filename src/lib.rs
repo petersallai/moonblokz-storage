@@ -22,7 +22,7 @@ pub mod backend_rp2040;
 #[cfg(all(feature = "backend-memory", feature = "backend-rp2040"))]
 compile_error!("At most one backend feature may be enabled: backend-memory or backend-rp2040.");
 
-use moonblokz_chain_types::Block;
+use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 #[cfg(feature = "backend-memory")]
@@ -115,7 +115,11 @@ pub trait StorageTrait {
     ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
-    ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
+    ///     fn read_block_into(
+    ///         &self,
+    ///         _storage_index: u32,
+    ///         _out: &mut [u8; moonblokz_chain_types::MAX_BLOCK_SIZE],
+    ///     ) -> Result<(), StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
     ///     fn capacity(&self) -> u32 {
@@ -168,7 +172,11 @@ pub trait StorageTrait {
     ///         }
     ///         Ok(())
     ///     }
-    ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
+    ///     fn read_block_into(
+    ///         &self,
+    ///         _storage_index: u32,
+    ///         _out: &mut [u8; moonblokz_chain_types::MAX_BLOCK_SIZE],
+    ///     ) -> Result<(), StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
     ///     fn capacity(&self) -> u32 {
@@ -197,10 +205,17 @@ pub trait StorageTrait {
         block: &Block,
     ) -> Result<(), StorageError>;
 
-    /// Reads and returns a block from a specific `storage_index`.
+    /// Reads the block at `storage_index` into the caller's buffer.
+    ///
+    /// `out` receives the slot's whole `MAX_BLOCK_SIZE` bytes as stored: a
+    /// shorter block comes back zero-padded, and the caller recovers its
+    /// length structurally. The bytes are checked to frame a block. This is
+    /// the one read a backend implements; it holds no block-sized copy of
+    /// its own, so a reader on a small stack pays for exactly one buffer.
     ///
     /// Parameters:
     /// - `storage_index`: slot index to read.
+    /// - `out`: destination buffer.
     ///
     /// Example:
     /// ```
@@ -218,7 +233,11 @@ pub trait StorageTrait {
     ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
-    ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
+    ///     fn read_block_into(
+    ///         &self,
+    ///         _storage_index: u32,
+    ///         _out: &mut [u8; moonblokz_chain_types::MAX_BLOCK_SIZE],
+    ///     ) -> Result<(), StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
     ///     fn capacity(&self) -> u32 {
@@ -233,10 +252,25 @@ pub trait StorageTrait {
     /// }
     ///
     /// let storage = DummyStorage;
-    /// let result = storage.read_block(0);
+    /// let mut out = [0u8; moonblokz_chain_types::MAX_BLOCK_SIZE];
+    /// let result = storage.read_block_into(0, &mut out);
     /// assert!(matches!(result, Err(StorageError::BlockAbsent)));
     /// ```
-    fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError>;
+    fn read_block_into(
+        &self,
+        storage_index: StorageIndex,
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError>;
+
+    /// Reads the block at `storage_index` as an owned [`Block`] — the
+    /// convenience form of [`Self::read_block_into`] for callers that need to
+    /// keep or re-save the block. It costs two block-sized buffers on the
+    /// caller's stack; a hot path reads into its own buffer instead.
+    fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError> {
+        let mut out = [0u8; MAX_BLOCK_SIZE];
+        self.read_block_into(storage_index, &mut out)?;
+        Block::from_bytes(&out).map_err(|_| StorageError::BackendIo { code: 3 })
+    }
 
     /// Returns deterministic storage slot capacity (`storage_index` upper bound).
     ///
@@ -259,7 +293,11 @@ pub trait StorageTrait {
     ///     fn save_block(&mut self, _storage_index: u32, _block: &moonblokz_chain_types::Block) -> Result<(), StorageError> {
     ///         Ok(())
     ///     }
-    ///     fn read_block(&self, _storage_index: u32) -> Result<moonblokz_chain_types::Block, StorageError> {
+    ///     fn read_block_into(
+    ///         &self,
+    ///         _storage_index: u32,
+    ///         _out: &mut [u8; moonblokz_chain_types::MAX_BLOCK_SIZE],
+    ///     ) -> Result<(), StorageError> {
     ///         Err(StorageError::BlockAbsent)
     ///     }
     ///     fn capacity(&self) -> u32 {

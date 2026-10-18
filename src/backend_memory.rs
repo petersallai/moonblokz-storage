@@ -4,7 +4,7 @@ use crate::{
     CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
     StorageIndex, StorageTrait,
 };
-use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
+use moonblokz_chain_types::{Block, BlockView, MAX_BLOCK_SIZE};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 const VERSION_OFFSET: usize = 0;
@@ -361,14 +361,19 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
         Ok(())
     }
 
-    fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError> {
+    fn read_block_into(
+        &self,
+        storage_index: StorageIndex,
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         let (slot_start, slot_end) = Self::slot_range(storage_index)?;
         let slot = &self.storage[slot_start..slot_end];
         if slot[0] == 0 {
             return Err(StorageError::BlockAbsent);
         }
-
-        Block::from_bytes(slot).map_err(|_| StorageError::BackendIo { code: 2 })
+        BlockView::from_bytes(slot).map_err(|_| StorageError::BackendIo { code: 2 })?;
+        out.copy_from_slice(slot);
+        Ok(())
     }
 
     fn capacity(&self) -> StorageIndex {

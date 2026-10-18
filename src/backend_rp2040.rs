@@ -5,7 +5,7 @@ use crate::{
     StorageIndex, StorageTrait,
 };
 use core::cell::RefCell;
-use moonblokz_chain_types::{Block, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
+use moonblokz_chain_types::{Block, BlockView, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
 
 #[cfg(all(not(test), target_arch = "arm"))]
@@ -298,17 +298,21 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         Ok(())
     }
 
-    fn read_slot(&self, mapping: &Rp2040SlotMapping) -> Result<Block, StorageError> {
+    fn read_slot(
+        &self,
+        mapping: &Rp2040SlotMapping,
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         let page_address = self.page_flash_address(mapping);
 
         #[cfg(any(test, not(target_arch = "arm")))]
         {
-            return self.read_slot_with_mock(page_address, mapping);
+            return self.read_slot_with_mock(page_address, mapping, out);
         }
 
         #[cfg(all(not(test), target_arch = "arm"))]
         {
-            return self.read_slot_with_flash(page_address, mapping);
+            return self.read_slot_with_flash(page_address, mapping, out);
         }
 
         #[allow(unreachable_code)]
@@ -320,7 +324,8 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         &self,
         page_address: usize,
         mapping: &Rp2040SlotMapping,
-    ) -> Result<Block, StorageError> {
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         let flash_mock = self.flash_mock.borrow();
         let mut page_buffer = self.page_buffer.borrow_mut();
         flash_mock
@@ -329,7 +334,7 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 
         let slot_start = mapping.byte_offset_in_page;
         let slot_end = slot_start + SLOT_SIZE_BYTES;
-        Self::decode_slot_block(&page_buffer[slot_start..slot_end])
+        Self::decode_slot_block(&page_buffer[slot_start..slot_end], out)
     }
 
     #[cfg(all(not(test), target_arch = "arm"))]
@@ -337,7 +342,8 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         &self,
         page_address: usize,
         mapping: &Rp2040SlotMapping,
-    ) -> Result<Block, StorageError> {
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         let mut flash = self.flash.borrow_mut();
         let mut page_buffer = self.page_buffer.borrow_mut();
         flash
@@ -346,10 +352,15 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 
         let slot_start = mapping.byte_offset_in_page;
         let slot_end = slot_start + SLOT_SIZE_BYTES;
-        Self::decode_slot_block(&page_buffer[slot_start..slot_end])
+        Self::decode_slot_block(&page_buffer[slot_start..slot_end], out)
     }
 
-    fn decode_slot_block(slot_bytes: &[u8]) -> Result<Block, StorageError> {
+    /// Checks the slot's hash and framing in place, in the page buffer, and
+    /// copies the block bytes into `out` only once both hold.
+    fn decode_slot_block(
+        slot_bytes: &[u8],
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         if slot_bytes.iter().all(|byte| *byte == 0xFF) {
             return Err(StorageError::BlockAbsent);
         }
@@ -357,14 +368,13 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         let mut stored_hash = [0u8; HASH_SIZE];
         stored_hash.copy_from_slice(&slot_bytes[SLOT_HASH_OFFSET..SLOT_HASH_OFFSET + HASH_SIZE]);
 
-        let mut hash_buffer = [0u8; MAX_BLOCK_SIZE];
-        hash_buffer.copy_from_slice(&slot_bytes[..MAX_BLOCK_SIZE]);
-        let computed_hash = calculate_hash(&hash_buffer);
-        if computed_hash != stored_hash {
+        let block_bytes = &slot_bytes[..MAX_BLOCK_SIZE];
+        if calculate_hash(block_bytes) != stored_hash {
             return Err(StorageError::IntegrityFailure);
         }
-
-        Block::from_bytes(&slot_bytes[..MAX_BLOCK_SIZE]).map_err(|_| StorageError::IntegrityFailure)
+        BlockView::from_bytes(block_bytes).map_err(|_| StorageError::IntegrityFailure)?;
+        out.copy_from_slice(block_bytes);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -701,13 +711,17 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
         self.write_slot(&mapping, block)
     }
 
-    fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError> {
+    fn read_block_into(
+        &self,
+        storage_index: StorageIndex,
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
         if storage_index >= self.max_storage_slots {
             return Err(StorageError::InvalidIndex);
         }
 
         let mapping = map_storage_index(storage_index);
-        self.read_slot(&mapping)
+        self.read_slot(&mapping, out)
     }
 
     fn capacity(&self) -> StorageIndex {
