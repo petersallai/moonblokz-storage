@@ -207,9 +207,11 @@ pub trait StorageTrait {
 
     /// Reads the block at `storage_index` into the caller's buffer.
     ///
-    /// `out` receives the slot's whole `MAX_BLOCK_SIZE` bytes as stored: a
-    /// shorter block comes back zero-padded, and the caller recovers its
-    /// length structurally. The bytes are checked to frame a block. This is
+    /// On `Ok`, every byte of `out` is written: the slot's whole
+    /// `MAX_BLOCK_SIZE` bytes as stored, so a shorter block comes back
+    /// zero-padded and the caller recovers its length structurally — a caller
+    /// may reuse one buffer across reads. On `Err` the content of `out` is
+    /// unspecified. The bytes are checked to frame a block. This is
     /// the one read a backend implements; it holds no block-sized copy of
     /// its own, so a reader on a small stack pays for exactly one buffer.
     ///
@@ -269,7 +271,10 @@ pub trait StorageTrait {
     fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError> {
         let mut out = [0u8; MAX_BLOCK_SIZE];
         self.read_block_into(storage_index, &mut out)?;
-        Block::from_bytes(&out).map_err(|_| StorageError::BackendIo { code: 3 })
+        // The backend already checked that `out` frames a block, and
+        // `Block::from_bytes` applies the same check, so this cannot fail; were
+        // it to, the bytes failed verification.
+        Block::from_bytes(&out).map_err(|_| StorageError::IntegrityFailure)
     }
 
     /// Returns deterministic storage slot capacity (`storage_index` upper bound).
