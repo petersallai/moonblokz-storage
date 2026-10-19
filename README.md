@@ -100,7 +100,9 @@ persistence/retrieval, and control-plane management:
 
 - `init(private_key, own_node_id, init_params)`
 - `save_block(storage_index, block)`
-- `read_block(storage_index)`
+- `read_block_into(storage_index, out)` — the read each backend implements; it
+  fills the caller's `MAX_BLOCK_SIZE` buffer (`read_block(storage_index)` is a
+  provided method returning an owned `Block`)
 - `capacity()`
 - `set_chain_configuration(block)`
 - `load_control_data()`
