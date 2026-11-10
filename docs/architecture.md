@@ -664,7 +664,7 @@ This appendix defines architecture-level data structure contracts and ownership 
   - `byte_offset_in_page = slot_index * SLOT_SIZE_BYTES`
   - `flash_address = page_base(page_index) + byte_offset_in_page`
 - A block never crosses page boundaries.
-- If `MAX_BLOCK_SIZE` does not divide page size exactly, tail bytes in each page remain reserved/unused.
+- If `SLOT_SIZE_BYTES` does not divide the page size exactly, tail bytes in each page remain reserved/unused.
 
 ### Invariants
 

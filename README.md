@@ -59,21 +59,25 @@ Default feature is `backend-memory`. A crate that only consumes `StorageTrait` (
 # Default (backend-memory)
 cargo check
 
-# Explicit memory backend
-cargo check --no-default-features --features backend-memory
+# Explicit memory backend (a crypto backend and a block-size tier are required
+# once default features are off)
+cargo check --no-default-features --features backend-memory,schnorr-crypto-bigint,block-size-2016
 
-# Explicit RP2040 backend
-cargo check --no-default-features --features backend-rp2040
+# Explicit RP2040 backend (the 2016 tier: the rp2040 backend fits blocks up to 3949 B)
+cargo check --no-default-features --features backend-rp2040,schnorr-crypto-bigint,block-size-2016
+
+# No backend (the blockchain builds this way and supplies its own)
+cargo check --no-default-features --features schnorr-crypto-bigint,block-size-2016
 ```
 
 These combinations must fail:
 
 ```sh
-# No backend selected
-cargo check --no-default-features
-
 # Multiple backends selected
-cargo check --no-default-features --features "backend-memory backend-rp2040"
+cargo check --no-default-features --features backend-memory,backend-rp2040,schnorr-crypto-bigint,block-size-2016
+
+# The rp2040 backend with a tier above its page
+cargo check --no-default-features --features backend-rp2040,schnorr-crypto-bigint,block-size-65536
 ```
 
 ## `BackendIo` Error Codes
