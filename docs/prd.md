@@ -209,7 +209,7 @@ The journeys reveal required capability areas:
 - Determinism constraints: synchronous `no_std` API, bounded operations, predictable failure behavior.
 - Integrity constraints: hash-verified reads only; never return data on hash mismatch.
 - Control-plane schema constraints: persisted control-plane layout is
-  `version:u8, private_key_size:u8, private_key:[u8;PRIVATE_KEY_SIZE], own_node_id:u32, init_params_size:u8, init_params:[u8;INIT_PARAMS_SIZE], max_block_size:u16, chain_config_block:[u8;MAX_BLOCK_SIZE], crc32:u32`.
+  `version:u8, private_key_size:u8, private_key:[u8;PRIVATE_KEY_SIZE], own_node_id:u32, init_params_size:u8, init_params:[u8;INIT_PARAMS_SIZE], max_block_size:u32, chain_config_block:[u8;MAX_BLOCK_SIZE], crc32:u32`. (`max_block_size` is the build's block capacity, `u32` since Story 6.15 / DEC-226, still control-plane version 1: a record in the earlier 2-byte layout fails its CRC, loads as `ControlPlaneCorrupted`, and the node re-initializes.)
 - Constant constraints: `INIT_PARAMS_SIZE = 100`; `PRIVATE_KEY_SIZE` is imported from `moonblokz-crypto-lib`.
 - Compatibility constraints: runtime constants from the binary must be checked against persisted size fields and return explicit errors on mismatch.
 - Layout constraints: control-plane replicas are stored at the beginning of storage space (`data_storage_start_address` onward), and block storage begins after reserved control-plane pages.

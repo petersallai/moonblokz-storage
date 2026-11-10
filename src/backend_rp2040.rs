@@ -32,8 +32,13 @@ const CP_PRIVATE_KEY_OFFSET: usize = CP_PRIVATE_KEY_SIZE_OFFSET + 1;
 const CP_OWN_NODE_ID_OFFSET: usize = CP_PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE;
 const CP_INIT_PARAMS_SIZE_OFFSET: usize = CP_OWN_NODE_ID_OFFSET + 4;
 const CP_INIT_PARAMS_OFFSET: usize = CP_INIT_PARAMS_SIZE_OFFSET + 1;
+// The persisted build block capacity is a `u32` (DEC-226): a block-size tier
+// above `u16` must be representable, and nothing truncates it. The layout stays
+// control-plane version 1 — no system is deployed — so a record in the earlier
+// 2-byte layout fails its CRC and loads as `ControlPlaneCorrupted`, and the node
+// re-initializes (the documented rollback).
 const CP_MAX_BLOCK_SIZE_OFFSET: usize = CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE;
-const CP_CHAIN_CONFIG_OFFSET: usize = CP_MAX_BLOCK_SIZE_OFFSET + 2;
+const CP_CHAIN_CONFIG_OFFSET: usize = CP_MAX_BLOCK_SIZE_OFFSET + 4;
 const CP_CRC32_OFFSET: usize = CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE;
 const CONTROL_PLANE_ENTRY_SIZE: usize = CP_CRC32_OFFSET + 4;
 
@@ -46,10 +51,14 @@ pub const BLOCKS_PER_PAGE_INDEX: StorageIndex = BLOCKS_PER_PAGE as StorageIndex;
 // Compile-time geometry guard.
 const _: () = {
     if BLOCKS_PER_PAGE == 0 {
-        panic!("MAX_BLOCK_SIZE must allow at least one block in a 4096-byte RP2040 page");
+        panic!(
+            "MAX_BLOCK_SIZE must allow at least one block in a 4096-byte RP2040 page; select the block-size-2016 tier for the rp2040 backend"
+        );
     }
     if CONTROL_PLANE_ENTRY_SIZE > FLASH_PAGE_SIZE {
-        panic!("control-plane entry must fit in one RP2040 flash page");
+        panic!(
+            "control-plane entry must fit in one RP2040 flash page (MAX_BLOCK_SIZE <= 3949); select the block-size-2016 tier for the rp2040 backend"
+        );
     }
 };
 
@@ -501,10 +510,9 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         out[CP_INIT_PARAMS_OFFSET..CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
             .copy_from_slice(&record.init_params);
 
-        // Intentional truncation: MAX_BLOCK_SIZE is guaranteed <= 65535 by the
-        // control-plane schema.
-        let max_block_size = MAX_BLOCK_SIZE as u16;
-        out[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 2]
+        // Lossless: chain-types asserts `MAX_BLOCK_SIZE <= u32::MAX`.
+        let max_block_size = MAX_BLOCK_SIZE as u32;
+        out[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 4]
             .copy_from_slice(&max_block_size.to_le_bytes());
 
         if let Some(chain_configuration) = &record.chain_configuration {
@@ -542,10 +550,10 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
             return Err(StorageError::ControlPlaneIncompatible);
         }
 
-        let mut max_block_size_bytes = [0u8; 2];
+        let mut max_block_size_bytes = [0u8; 4];
         max_block_size_bytes
-            .copy_from_slice(&bytes[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 2]);
-        let persisted_max_block_size = u16::from_le_bytes(max_block_size_bytes) as usize;
+            .copy_from_slice(&bytes[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 4]);
+        let persisted_max_block_size = u32::from_le_bytes(max_block_size_bytes) as usize;
         if persisted_max_block_size != MAX_BLOCK_SIZE {
             return Err(StorageError::ControlPlaneIncompatible);
         }

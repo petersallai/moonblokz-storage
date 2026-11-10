@@ -637,7 +637,7 @@ This appendix defines architecture-level data structure contracts and ownership 
   - fixed-size header + variable-size payload
   - little-endian for multi-byte fields
   - payload structure depends on payload type
-- `MAX_BLOCK_SIZE` is a compile-time constant from `moonblokz-chain-types`.
+- `MAX_BLOCK_SIZE` is the build's block capacity from `moonblokz-chain-types`, selected by a block-size tier feature (`block-size-2016` default, `block-size-65536`; DEC-220). The control plane persists it as a `u32` (DEC-226). The rp2040 backend fits only tiers up to 3949 B (one control-plane replica per 4096 B page); a larger tier fails to compile there.
 
 **Header Fields (Part V):**
 - `version (u8)`
@@ -656,12 +656,12 @@ This appendix defines architecture-level data structure contracts and ownership 
 - Storage index type uses canonical naming: `storage_index`.
 - RP2040 backend uses flash page-based placement with compile-time constants:
   - `FLASH_PAGE_SIZE = 4096`
-  - `BLOCKS_PER_PAGE = FLASH_PAGE_SIZE / MAX_BLOCK_SIZE` (floor)
+  - `BLOCKS_PER_PAGE = FLASH_PAGE_SIZE / SLOT_SIZE_BYTES` (floor), with `SLOT_SIZE_BYTES = MAX_BLOCK_SIZE + HASH_SIZE`
 - `BLOCKS_PER_PAGE` must be `>= 1`, otherwise build/config is invalid.
 - Mapping rules:
   - `page_index = storage_index / BLOCKS_PER_PAGE`
   - `slot_index = storage_index % BLOCKS_PER_PAGE`
-  - `byte_offset_in_page = slot_index * MAX_BLOCK_SIZE`
+  - `byte_offset_in_page = slot_index * SLOT_SIZE_BYTES`
   - `flash_address = page_base(page_index) + byte_offset_in_page`
 - A block never crosses page boundaries.
 - If `MAX_BLOCK_SIZE` does not divide page size exactly, tail bytes in each page remain reserved/unused.
@@ -701,6 +701,7 @@ This appendix defines architecture-level data structure contracts and ownership 
 
 - Additive changes to data structures require backward-compatibility review.
 - Breaking type/binary-layout changes require explicit versioning and migration strategy definition before release-phase publication.
+- Pre-release layout change (Story 6.15, DEC-226): the control-plane `max_block_size` field widened from `u16` to `u32` without a version bump, because no system is deployed. Rollback in both directions: a record in the other layout fails its CRC (the CRC offset moved by 2 bytes), loads as `ControlPlaneCorrupted`, and the node waits for `/I_…` and re-initializes, wiping identity, chain configuration and blocks. The first release fixes this layout at version 1.
 - Architecture and docs must be updated before implementation diverges from this contract.
 
 ### AI Agent Implementation Guidance

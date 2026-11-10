@@ -15,7 +15,7 @@ mod tests {
         * crate::backend_rp2040::BLOCKS_PER_PAGE) as u32;
     #[cfg(feature = "backend-memory")]
     const TEST_CONTROL_PLANE_ENTRY_SIZE: usize =
-        1 + 1 + PRIVATE_KEY_SIZE + 4 + 1 + crate::INIT_PARAMS_SIZE + 2 + MAX_BLOCK_SIZE + 4;
+        1 + 1 + PRIVATE_KEY_SIZE + 4 + 1 + crate::INIT_PARAMS_SIZE + 4 + MAX_BLOCK_SIZE + 4;
     #[cfg(feature = "backend-memory")]
     const TEST_CONTROL_PLANE_RESERVED_BYTES: usize =
         crate::CONTROL_PLANE_COUNT * TEST_CONTROL_PLANE_ENTRY_SIZE;

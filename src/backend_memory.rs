@@ -13,8 +13,13 @@ const PRIVATE_KEY_OFFSET: usize = PRIVATE_KEY_SIZE_OFFSET + 1;
 const OWN_NODE_ID_OFFSET: usize = PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE;
 const INIT_PARAMS_SIZE_OFFSET: usize = OWN_NODE_ID_OFFSET + 4;
 const INIT_PARAMS_OFFSET: usize = INIT_PARAMS_SIZE_OFFSET + 1;
+// The persisted build block capacity is a `u32` (DEC-226): a block-size tier
+// above `u16` must be representable, and nothing truncates it. The layout stays
+// control-plane version 1 — no system is deployed — so a record in the earlier
+// 2-byte layout fails its CRC and loads as `ControlPlaneCorrupted`, and the node
+// re-initializes (the documented rollback).
 const MAX_BLOCK_SIZE_OFFSET: usize = INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE;
-const CHAIN_CONFIG_OFFSET: usize = MAX_BLOCK_SIZE_OFFSET + 2;
+const CHAIN_CONFIG_OFFSET: usize = MAX_BLOCK_SIZE_OFFSET + 4;
 const CONTROL_CRC32_OFFSET: usize = CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE;
 const CONTROL_PLANE_ENTRY_SIZE: usize = CONTROL_CRC32_OFFSET + 4;
 const CONTROL_PLANE_RESERVED_BYTES: usize = CONTROL_PLANE_COUNT * CONTROL_PLANE_ENTRY_SIZE;
@@ -166,11 +171,10 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
             .copy_from_slice(&record.init_params);
 
-        // Intentional truncation: MAX_BLOCK_SIZE is guaranteed <= 65535 by the
-        // control-plane schema.
-        let max_block_size_u16 = MAX_BLOCK_SIZE as u16;
-        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]
-            .copy_from_slice(&max_block_size_u16.to_le_bytes());
+        // Lossless: chain-types asserts `MAX_BLOCK_SIZE <= u32::MAX`.
+        let max_block_size = MAX_BLOCK_SIZE as u32;
+        out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 4]
+            .copy_from_slice(&max_block_size.to_le_bytes());
 
         if let Some(chain_configuration) = &record.chain_configuration {
             let bytes = chain_configuration.serialized_bytes();
@@ -209,10 +213,10 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
             return Err(StorageError::ControlPlaneIncompatible);
         }
 
-        let mut max_block_size_bytes = [0u8; 2];
+        let mut max_block_size_bytes = [0u8; 4];
         max_block_size_bytes
-            .copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]);
-        let persisted_max_block_size = u16::from_le_bytes(max_block_size_bytes) as usize;
+            .copy_from_slice(&bytes[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 4]);
+        let persisted_max_block_size = u32::from_le_bytes(max_block_size_bytes) as usize;
         if persisted_max_block_size != MAX_BLOCK_SIZE {
             return Err(StorageError::ControlPlaneIncompatible);
         }
@@ -467,6 +471,33 @@ mod tests {
         assert!(matches!(
             backend.init(TEST_PRIVATE_KEY, TEST_NODE_ID, TEST_INIT_PARAMS),
             Err(StorageError::InvalidConfiguration)
+        ));
+    }
+
+    /// DEC-226: the persisted block capacity became a `u32` without a version
+    /// bump. A record in the earlier layout (2-byte field, CRC two bytes
+    /// earlier) fails the CRC and loads as corrupted — the documented rollback
+    /// signal, on which the node re-initializes.
+    #[test]
+    fn a_record_in_the_two_byte_layout_loads_as_corrupted() {
+        let mut backend = initialized_backend::<TEST_STORAGE_SIZE_2_SLOTS>();
+        let current = backend.read_control_plane_entry(0);
+        let mut old = current;
+        // The earlier layout: the same prefix, a 2-byte capacity, the chain-config
+        // area two bytes earlier, and its CRC over the 2-byte-shorter record.
+        old[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 2]
+            .copy_from_slice(&(MAX_BLOCK_SIZE as u16).to_le_bytes());
+        old[MAX_BLOCK_SIZE_OFFSET + 2..].fill(0);
+        let old_crc_offset = CONTROL_CRC32_OFFSET - 2;
+        let crc = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::crc32(&old[..old_crc_offset]);
+        old[old_crc_offset..old_crc_offset + 4].copy_from_slice(&crc.to_le_bytes());
+        for replica in 0..3 {
+            backend.write_control_plane_entry(replica, &old);
+        }
+
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneCorrupted)
         ));
     }
 
