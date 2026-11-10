@@ -10,7 +10,9 @@ keywords = ["embedded", "no-std", "blockchain", "rp2040", "storage"]
 categories = ["embedded", "no-std"]
 
 [features]
-default = ["backend-memory", "schnorr-crypto-bigint"]
+default = ["backend-memory", "schnorr-crypto-bigint", "block-size-2016"]
+block-size-2016 = ["moonblokz-chain-types/block-size-2016"]
+block-size-65536 = ["moonblokz-chain-types/block-size-65536"]
 backend-memory = []
 backend-rp2040 = []
 # Crypto backend forwarding — the backend is NOT baked in here. Choose exactly
