@@ -67,6 +67,10 @@ pub const CONTROL_PLANE_COUNT: usize = 3;
 /// Storage-library control-plane schema version.
 pub const CONTROL_PLANE_VERSION: u8 = 1;
 
+// The control plane persists the build's block capacity as a `u32` (DEC-226);
+// both backends cast `MAX_BLOCK_SIZE as u32`, which this keeps lossless.
+const _: () = assert!(moonblokz_chain_types::MAX_BLOCK_SIZE <= u32::MAX as usize);
+
 /// Canonical control-plane data returned by `load_control_data`.
 ///
 /// # Security model
