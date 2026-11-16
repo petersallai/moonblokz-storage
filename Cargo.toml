@@ -10,19 +10,19 @@ keywords = ["embedded", "no-std", "blockchain", "rp2040", "storage"]
 categories = ["embedded", "no-std"]
 
 [features]
-default = ["backend-memory", "schnorr-crypto-bigint", "block-size-2016"]
+default = ["backend-memory", "schnorr", "block-size-2016"]
 block-size-2016 = ["moonblokz-chain-types/block-size-2016"]
 block-size-65536 = ["moonblokz-chain-types/block-size-65536"]
 backend-memory = []
 backend-rp2040 = []
 # Crypto backend forwarding — the backend is NOT baked in here. Choose exactly
 # one; it is forwarded to both chain-types and crypto (no storage src gates on
-# the backend, so these are pure forwards). The default is the embedded-oriented
-# crypto-bigint backend; a consumer overrides via `default-features = false` +
-# an alternate backend feature.
-schnorr-crypto-bigint = ["moonblokz-chain-types/schnorr-crypto-bigint", "moonblokz-crypto/schnorr-crypto-bigint"]
-schnorr-malachite = ["moonblokz-chain-types/schnorr-malachite", "moonblokz-crypto/schnorr-malachite"]
-schnorr-num-bigint-dig = ["moonblokz-chain-types/schnorr-num-bigint-dig", "moonblokz-crypto/schnorr-num-bigint-dig"]
+# the backend, so these are pure forwards). The features name the signature
+# scheme (DEC-246); the default is `schnorr`, and a consumer selects another via
+# `default-features = false` + `bls-min-sig` / `bls-min-pk`.
+schnorr = ["moonblokz-chain-types/schnorr", "moonblokz-crypto/schnorr"]
+bls-min-sig = ["moonblokz-chain-types/bls-min-sig", "moonblokz-crypto/bls-min-sig"]
+bls-min-pk = ["moonblokz-chain-types/bls-min-pk", "moonblokz-crypto/bls-min-pk"]
 
 [dependencies]
 moonblokz-chain-types = { path = "../moonblokz-chain-types", default-features = false }
