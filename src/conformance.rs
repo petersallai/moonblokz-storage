@@ -139,11 +139,11 @@ mod tests {
             storage.read_block(0),
             Err(StorageError::BlockAbsent)
         ));
-        assert!(matches!(storage.read_block(1), Ok(_)));
+        assert!(storage.read_block(1).is_ok());
         assert!(matches!(
             storage.read_block(2),
             Err(StorageError::BlockAbsent)
         ));
-        assert!(matches!(storage.read_block(3), Ok(_)));
+        assert!(storage.read_block(3).is_ok());
     }
 }

@@ -74,6 +74,12 @@ pub struct MemoryBackend<const STORAGE_SIZE: usize> {
     storage: [u8; STORAGE_SIZE],
 }
 
+impl<const STORAGE_SIZE: usize> Default for MemoryBackend<STORAGE_SIZE> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
     const MAX_STORAGE_SLOTS: StorageIndex = if STORAGE_SIZE > CONTROL_PLANE_RESERVED_BYTES {
         ((STORAGE_SIZE - CONTROL_PLANE_RESERVED_BYTES) / MAX_BLOCK_SIZE) as StorageIndex
@@ -304,8 +310,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         };
 
         let encoded = Self::serialize_record(&record);
-        for repair_index in 0..invalid_len {
-            let target = invalid_indexes[repair_index];
+        for &target in invalid_indexes.iter().take(invalid_len) {
             if Some(target) != first_valid_index {
                 self.write_control_plane_entry(target, &encoded);
             }
@@ -683,12 +688,12 @@ mod tests {
             backend.read_block(0),
             Err(StorageError::BlockAbsent)
         ));
-        assert!(matches!(backend.read_block(1), Ok(_)));
+        assert!(backend.read_block(1).is_ok());
         assert!(matches!(
             backend.read_block(2),
             Err(StorageError::BlockAbsent)
         ));
-        assert!(matches!(backend.read_block(3), Ok(_)));
+        assert!(backend.read_block(3).is_ok());
         assert!(matches!(
             backend.read_block(4),
             Err(StorageError::InvalidIndex)
