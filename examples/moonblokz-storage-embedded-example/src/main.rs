@@ -15,7 +15,7 @@ Behavior:
 use cortex_m_rt::entry;
 use embassy_rp::gpio::{Level, Output};
 use moonblokz_chain_types::{Block, BlockBuilder, BlockHeader};
-use moonblokz_crypto::{Crypto, CryptoTrait, PRIVATE_KEY_SIZE};
+use moonblokz_crypto::{Crypto, CryptoTrait, PRIVATE_KEY_SIZE, SIGNATURE_SIZE};
 use moonblokz_storage::{INIT_PARAMS_SIZE, Rp2040Backend, StorageError, StorageTrait};
 use panic_halt as _;
 
@@ -34,7 +34,7 @@ fn make_example_block() -> Result<Block, StorageError> {
         first_voted_node: 0,
         consumed_votes_from_first_voted_node: 0,
         previous_hash: [0u8; 32],
-        signature: [1u8; 64],
+        signature: [1u8; SIGNATURE_SIZE],
     };
 
     let crypto =
