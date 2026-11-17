@@ -31,7 +31,6 @@ moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false 
 [target.'cfg(target_arch = "arm")'.dependencies]
 embassy-rp = { version = "0.8", features = ["unstable-pac", "critical-section-impl", "rp2040"] }
 
-
 # Debug test runs build the curve code optimized (DEC-255): a BLS pairing in an
 # unoptimized build is very slow. Only takes effect when this crate is the Cargo root.
 [profile.dev.package.moonblokz-crypto]
