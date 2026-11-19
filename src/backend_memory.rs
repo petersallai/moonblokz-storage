@@ -526,6 +526,10 @@ mod tests {
             backend.load_control_data(),
             Err(StorageError::ControlPlaneCorrupted)
         ));
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneCorrupted)
+        ));
     }
 
     #[test]
@@ -572,8 +576,10 @@ mod tests {
         let config = block_from_len_and_marker(HEADER_SIZE, 3);
         assert!(backend.set_chain_configuration(&config).is_ok());
 
+        // Corrupt a key byte of replica 0: the key must come from a good
+        // replica, and the repair must rewrite replica 0's key.
         let mut replica = backend.read_control_plane_entry(0);
-        replica[VERSION_OFFSET] ^= 0xFF;
+        replica[PRIVATE_KEY_OFFSET] ^= 0xFF;
         backend.write_control_plane_entry(0, &replica);
 
         assert_eq!(backend.load_private_key().unwrap(), key);
@@ -588,21 +594,31 @@ mod tests {
         assert!(loaded.chain_configuration.is_some());
     }
 
-    /// The persisted layout is unchanged by Story 6.9: the CRC32 of a fixed
-    /// record's replica bytes, captured at `4a960fd` (before the split).
+    /// The persisted layout is unchanged by Story 6.9. The stored CRC field is
+    /// the CRC32 of every byte before it, so pinning it pins the whole record:
+    /// key, node id, init params, capacity and chain-config block. Captured on
+    /// `main` before the split; the value is the same under all three schemes
+    /// and holds for the reference block-size tier only.
+    #[cfg(feature = "block-size-2016")]
     #[test]
     fn control_plane_layout_matches_pre_split_bytes() {
         let mut key = [0u8; PRIVATE_KEY_SIZE];
         for (i, byte) in key.iter_mut().enumerate() {
             *byte = i as u8 + 1;
         }
+        let mut config = [0u8; MAX_BLOCK_SIZE];
+        config[0] = 1;
+        config[1] = 55;
+        let config = Block::from_bytes(&config)
+            .ok()
+            .unwrap_or_else(|| unreachable!());
         let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
         assert!(backend.init(key, 0x0102_0304, TEST_INIT_PARAMS).is_ok());
+        assert!(backend.set_chain_configuration(&config).is_ok());
         let entry = backend.read_control_plane_entry(0);
-        assert_eq!(
-            MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::crc32(&entry),
-            0x2144_df1c
-        );
+        let mut stored_crc = [0u8; 4];
+        stored_crc.copy_from_slice(&entry[CONTROL_CRC32_OFFSET..CONTROL_CRC32_OFFSET + 4]);
+        assert_eq!(u32::from_le_bytes(stored_crc), 0x0ac7_ba57);
     }
 
     #[test]

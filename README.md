@@ -118,6 +118,9 @@ One call is a method of each backend struct, not of `StorageTrait`:
   `StorageTrait`, such as the blockchain, cannot call it, so it never receives
   the key.
 
+The key is persisted in plaintext: the control plane's CRC32 detects bit rot
+only, and physical flash dumps are outside the threat model.
+
 Minimal index-boundary usage:
 
 ```rust

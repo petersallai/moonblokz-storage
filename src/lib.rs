@@ -76,6 +76,15 @@ const _: () = assert!(moonblokz_chain_types::MAX_BLOCK_SIZE <= u32::MAX as usize
 /// It carries no private key (FR11): the node runtime reads the key with the
 /// backend's own `load_private_key`, which is not part of `StorageTrait`, so a
 /// consumer bound only by the trait never receives it (FR54; blockchain FR68).
+/// The boundary is a type fact, pinned here:
+///
+/// ```compile_fail,E0599
+/// use moonblokz_storage::StorageTrait;
+///
+/// fn key_of<S: StorageTrait>(storage: &mut S) {
+///     let _ = storage.load_private_key();
+/// }
+/// ```
 ///
 /// # Binary size
 ///
@@ -102,6 +111,9 @@ pub(crate) struct ControlRecord {
 /// Synchronous, `no_std` storage API contract for MoonBlokz chain logic.
 pub trait StorageTrait {
     /// Initializes backend storage state.
+    ///
+    /// The private key is persisted in plaintext: CRC32 detects bit rot only,
+    /// and physical flash dumps are outside the threat model.
     ///
     /// Parameters:
     /// - `private_key`: node private key bytes.

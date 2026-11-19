@@ -1246,8 +1246,10 @@ mod tests {
                 .is_ok()
         );
 
+        // Corrupt a key byte of replica 0: the key must come from a good
+        // replica, and the repair must rewrite replica 0's key.
         let replica0_addr = backend.control_plane_page_address(0);
-        backend.flash_mock.borrow_mut().data[replica0_addr] ^= 0xFF;
+        backend.flash_mock.borrow_mut().data[replica0_addr + CP_PRIVATE_KEY_OFFSET] ^= 0xFF;
 
         assert_eq!(backend.load_private_key().unwrap(), key);
         let repaired = backend
@@ -1260,8 +1262,12 @@ mod tests {
         assert!(loaded.chain_configuration.is_some());
     }
 
-    /// The persisted layout is unchanged by Story 6.9: the CRC32 of a fixed
-    /// record's replica page, captured at `4a960fd` (before the split).
+    /// The persisted layout is unchanged by Story 6.9. The stored CRC field is
+    /// the CRC32 of every byte before it, so pinning it pins the whole record:
+    /// key, node id, init params, capacity and chain-config block. Captured on
+    /// `main` before the split; the value is the same under all three schemes
+    /// and holds for the reference block-size tier only.
+    #[cfg(feature = "block-size-2016")]
     #[test]
     fn control_plane_layout_matches_pre_split_bytes() {
         let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
@@ -1275,16 +1281,66 @@ mod tests {
                 .init(key, 0x0102_0304, [9u8; INIT_PARAMS_SIZE])
                 .is_ok()
         );
+        assert!(
+            backend
+                .set_chain_configuration(&block_from_marker(55))
+                .is_ok()
+        );
         let mut page = [0u8; FLASH_PAGE_SIZE];
         assert!(
             backend
                 .read_page(backend.control_plane_page_address(0), &mut page)
                 .is_ok()
         );
-        assert_eq!(
-            Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::crc32(&page),
-            0x719d_220a
+        let mut stored_crc = [0u8; 4];
+        stored_crc.copy_from_slice(&page[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4]);
+        assert_eq!(u32::from_le_bytes(stored_crc), 0x9145_b0ec);
+    }
+
+    /// `load_private_key` reports the errors `load_control_data` reports.
+    #[test]
+    fn load_private_key_reports_incompatible_and_corrupted_like_control_data() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(
+            backend
+                .init([1u8; PRIVATE_KEY_SIZE], 1, [2u8; INIT_PARAMS_SIZE])
+                .is_ok()
         );
+
+        // Every replica a CRC-valid record of the next version: incompatible.
+        for replica in 0..CONTROL_PLANE_COUNT {
+            let address = backend.control_plane_page_address(replica);
+            let mut flash = backend.flash_mock.borrow_mut();
+            flash.data[address + CP_VERSION_OFFSET] = CONTROL_PLANE_VERSION.wrapping_add(1);
+            let crc = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::crc32(
+                &flash.data[address..address + CP_CRC32_OFFSET],
+            );
+            flash.data[address + CP_CRC32_OFFSET..address + CP_CRC32_OFFSET + 4]
+                .copy_from_slice(&crc.to_le_bytes());
+        }
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneIncompatible)
+        ));
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneIncompatible)
+        ));
+
+        // Every replica failing its CRC: corrupted.
+        for replica in 0..CONTROL_PLANE_COUNT {
+            let address = backend.control_plane_page_address(replica);
+            backend.flash_mock.borrow_mut().data[address + CP_OWN_NODE_ID_OFFSET] ^= 0xFF;
+        }
+        assert!(matches!(
+            backend.load_control_data(),
+            Err(StorageError::ControlPlaneCorrupted)
+        ));
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneCorrupted)
+        ));
     }
 
     #[test]

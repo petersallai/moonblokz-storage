@@ -81,7 +81,10 @@ mod tests {
                 .is_ok()
         );
         assert!(matches!(storage.load_private_key(), Ok(loaded) if loaded == key));
-        assert!(storage.load_control_data().is_ok());
+        assert!(matches!(
+            storage.load_control_data(),
+            Ok(data) if data.own_node_id == 1 && data.chain_configuration.is_some()
+        ));
     }
 
     #[test]
