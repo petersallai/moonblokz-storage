@@ -1,8 +1,8 @@
 /*! In-memory backend module for MoonBlokz storage contract testing/integration. */
 
 use crate::{
-    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
-    StorageIndex, StorageTrait,
+    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, ControlRecord, INIT_PARAMS_SIZE,
+    StorageError, StorageIndex, StorageTrait,
 };
 use moonblokz_chain_types::{Block, BlockView, MAX_BLOCK_SIZE};
 use moonblokz_crypto::PRIVATE_KEY_SIZE;
@@ -161,7 +161,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         !crc
     }
 
-    fn serialize_record(record: &ControlPlaneData) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
+    fn serialize_record(record: &ControlRecord) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
         let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
         out[VERSION_OFFSET] = CONTROL_PLANE_VERSION;
         // Intentional truncation: PRIVATE_KEY_SIZE is guaranteed <= 255 by the
@@ -170,19 +170,19 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         out[PRIVATE_KEY_OFFSET..PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]
             .copy_from_slice(&record.private_key);
         out[OWN_NODE_ID_OFFSET..OWN_NODE_ID_OFFSET + 4]
-            .copy_from_slice(&record.own_node_id.to_le_bytes());
+            .copy_from_slice(&record.data.own_node_id.to_le_bytes());
         // Intentional truncation: INIT_PARAMS_SIZE is guaranteed <= 255 by the
         // control-plane schema.
         out[INIT_PARAMS_SIZE_OFFSET] = INIT_PARAMS_SIZE as u8;
         out[INIT_PARAMS_OFFSET..INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
-            .copy_from_slice(&record.init_params);
+            .copy_from_slice(&record.data.init_params);
 
         // Lossless: chain-types asserts `MAX_BLOCK_SIZE <= u32::MAX`.
         let max_block_size = MAX_BLOCK_SIZE as u32;
         out[MAX_BLOCK_SIZE_OFFSET..MAX_BLOCK_SIZE_OFFSET + 4]
             .copy_from_slice(&max_block_size.to_le_bytes());
 
-        if let Some(chain_configuration) = &record.chain_configuration {
+        if let Some(chain_configuration) = &record.data.chain_configuration {
             let bytes = chain_configuration.serialized_bytes();
             out[CHAIN_CONFIG_OFFSET..CHAIN_CONFIG_OFFSET + bytes.len()].copy_from_slice(bytes);
         }
@@ -194,7 +194,7 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
 
     fn deserialize_record(
         bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) -> Result<ControlPlaneData, StorageError> {
+    ) -> Result<ControlRecord, StorageError> {
         if bytes.iter().all(|value| *value == 0) {
             return Err(StorageError::ControlPlaneUninitialized);
         }
@@ -248,19 +248,21 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
             Some(Block::from_bytes(&value).map_err(|_| StorageError::ControlPlaneCorrupted)?)
         };
 
-        Ok(ControlPlaneData {
+        Ok(ControlRecord {
             private_key,
-            own_node_id,
-            init_params,
-            chain_configuration,
+            data: ControlPlaneData {
+                own_node_id,
+                init_params,
+                chain_configuration,
+            },
         })
     }
 
-    fn load_primary_record_and_repair(&mut self) -> Result<ControlPlaneData, StorageError> {
+    fn load_primary_record_and_repair(&mut self) -> Result<ControlRecord, StorageError> {
         Self::validate_control_plane_capacity()?;
 
         let mut first_valid_index: Option<usize> = None;
-        let mut first_valid_record: Option<ControlPlaneData> = None;
+        let mut first_valid_record: Option<ControlRecord> = None;
         let mut invalid_indexes = [usize::MAX; CONTROL_PLANE_COUNT];
         let mut invalid_len = 0usize;
         let mut saw_non_zero = false;
@@ -319,16 +321,36 @@ impl<const STORAGE_SIZE: usize> MemoryBackend<STORAGE_SIZE> {
         Ok(record)
     }
 
-    fn write_record_to_all_replicas(
-        &mut self,
-        record: &ControlPlaneData,
-    ) -> Result<(), StorageError> {
+    fn write_record_to_all_replicas(&mut self, record: &ControlRecord) -> Result<(), StorageError> {
         Self::validate_control_plane_capacity()?;
         let encoded = Self::serialize_record(record);
         for index in 0..CONTROL_PLANE_COUNT {
             self.write_control_plane_entry(index, &encoded);
         }
         Ok(())
+    }
+
+    /// Loads the persisted private key, for the node runtime to hand to the
+    /// crypto module (FR54). It reads the replica `load_control_data` reads,
+    /// with the same errors and the same best-effort repair. Not part of
+    /// `StorageTrait`, so the blockchain cannot call it (blockchain FR68).
+    ///
+    /// The key is stored in plaintext: CRC32 detects bit rot only, and
+    /// physical flash dumps are outside the threat model.
+    ///
+    /// Example:
+    /// ```
+    /// use moonblokz_chain_types::MAX_BLOCK_SIZE;
+    /// use moonblokz_crypto::PRIVATE_KEY_SIZE;
+    /// use moonblokz_storage::{INIT_PARAMS_SIZE, StorageTrait, backend_memory::MemoryBackend};
+    ///
+    /// let mut storage = MemoryBackend::<{ 8 * MAX_BLOCK_SIZE + 8000 }>::new();
+    /// let key = [7u8; PRIVATE_KEY_SIZE];
+    /// assert!(storage.init(key, 1, [0u8; INIT_PARAMS_SIZE]).is_ok());
+    /// assert!(matches!(storage.load_private_key(), Ok(loaded) if loaded == key));
+    /// ```
+    pub fn load_private_key(&mut self) -> Result<[u8; PRIVATE_KEY_SIZE], StorageError> {
+        Ok(self.load_primary_record_and_repair()?.private_key)
     }
 }
 
@@ -342,11 +364,13 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
         Self::validate_control_plane_capacity()?;
         self.storage.fill(0);
 
-        let record = ControlPlaneData {
+        let record = ControlRecord {
             private_key,
-            own_node_id,
-            init_params,
-            chain_configuration: None,
+            data: ControlPlaneData {
+                own_node_id,
+                init_params,
+                chain_configuration: None,
+            },
         };
         self.write_record_to_all_replicas(&record)?;
         Ok(())
@@ -391,11 +415,11 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
 
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
         let mut record = self.load_primary_record_and_repair()?;
-        if record.chain_configuration.is_some() {
+        if record.data.chain_configuration.is_some() {
             return Err(StorageError::ChainConfigurationAlreadySet);
         }
 
-        record.chain_configuration = Some(
+        record.data.chain_configuration = Some(
             Block::from_bytes(block.serialized_bytes())
                 .map_err(|_| StorageError::BackendIo { code: 1 })?,
         );
@@ -405,9 +429,7 @@ impl<const STORAGE_SIZE: usize> StorageTrait for MemoryBackend<STORAGE_SIZE> {
     }
 
     fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
-        let record = self.load_primary_record_and_repair()?;
-
-        Ok(record)
+        Ok(self.load_primary_record_and_repair()?.data)
     }
 }
 
@@ -522,6 +544,65 @@ mod tests {
             backend.load_control_data(),
             Err(StorageError::ControlPlaneIncompatible)
         ));
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneIncompatible)
+        ));
+    }
+
+    #[test]
+    fn load_private_key_reports_uninitialized_before_init() {
+        let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneUninitialized)
+        ));
+    }
+
+    /// The key is not in `ControlPlaneData`, so the backend must carry it
+    /// through `set_chain_configuration`'s rewrite and a replica repair.
+    #[test]
+    fn private_key_survives_chain_configuration_and_replica_repair() {
+        let mut key = [0u8; PRIVATE_KEY_SIZE];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = i as u8 + 1;
+        }
+        let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
+        assert!(backend.init(key, TEST_NODE_ID, TEST_INIT_PARAMS).is_ok());
+        let config = block_from_len_and_marker(HEADER_SIZE, 3);
+        assert!(backend.set_chain_configuration(&config).is_ok());
+
+        let mut replica = backend.read_control_plane_entry(0);
+        replica[VERSION_OFFSET] ^= 0xFF;
+        backend.write_control_plane_entry(0, &replica);
+
+        assert_eq!(backend.load_private_key().unwrap(), key);
+        let repaired = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::deserialize_record(
+            &backend.read_control_plane_entry(0),
+        )
+        .unwrap_or_else(|_| unreachable!());
+        assert_eq!(repaired.private_key, key);
+        assert!(repaired.data.chain_configuration.is_some());
+        let loaded = backend.load_control_data().unwrap();
+        assert_eq!(loaded.own_node_id, TEST_NODE_ID);
+        assert!(loaded.chain_configuration.is_some());
+    }
+
+    /// The persisted layout is unchanged by Story 6.9: the CRC32 of a fixed
+    /// record's replica bytes, captured at `4a960fd` (before the split).
+    #[test]
+    fn control_plane_layout_matches_pre_split_bytes() {
+        let mut key = [0u8; PRIVATE_KEY_SIZE];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = i as u8 + 1;
+        }
+        let mut backend = MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::new();
+        assert!(backend.init(key, 0x0102_0304, TEST_INIT_PARAMS).is_ok());
+        let entry = backend.read_control_plane_entry(0);
+        assert_eq!(
+            MemoryBackend::<TEST_STORAGE_SIZE_2_SLOTS>::crc32(&entry),
+            0x2144_df1c
+        );
     }
 
     #[test]
@@ -541,7 +622,7 @@ mod tests {
             Err(StorageError::BlockAbsent)
         ));
         let loaded = backend.load_control_data().unwrap();
-        assert_eq!(loaded.private_key, TEST_PRIVATE_KEY);
+        assert_eq!(backend.load_private_key().unwrap(), TEST_PRIVATE_KEY);
         assert_eq!(loaded.own_node_id, TEST_NODE_ID);
         assert_eq!(loaded.init_params, TEST_INIT_PARAMS);
         assert!(loaded.chain_configuration.is_none());

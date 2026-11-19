@@ -1,8 +1,8 @@
 /*! RP2040 backend geometry mapping and synchronous flash save/retrieve paths. */
 
 use crate::{
-    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, INIT_PARAMS_SIZE, StorageError,
-    StorageIndex, StorageTrait,
+    CONTROL_PLANE_COUNT, CONTROL_PLANE_VERSION, ControlPlaneData, ControlRecord, INIT_PARAMS_SIZE,
+    StorageError, StorageIndex, StorageTrait,
 };
 use core::cell::RefCell;
 use moonblokz_chain_types::{Block, BlockView, HASH_SIZE, MAX_BLOCK_SIZE, calculate_hash};
@@ -494,7 +494,7 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         !crc
     }
 
-    fn serialize_control_record(record: &ControlPlaneData) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
+    fn serialize_control_record(record: &ControlRecord) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
         let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
         out[CP_VERSION_OFFSET] = CONTROL_PLANE_VERSION;
         // Intentional truncation: PRIVATE_KEY_SIZE is guaranteed <= 255 by the
@@ -503,19 +503,19 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         out[CP_PRIVATE_KEY_OFFSET..CP_PRIVATE_KEY_OFFSET + PRIVATE_KEY_SIZE]
             .copy_from_slice(&record.private_key);
         out[CP_OWN_NODE_ID_OFFSET..CP_OWN_NODE_ID_OFFSET + 4]
-            .copy_from_slice(&record.own_node_id.to_le_bytes());
+            .copy_from_slice(&record.data.own_node_id.to_le_bytes());
         // Intentional truncation: INIT_PARAMS_SIZE is guaranteed <= 255 by the
         // control-plane schema.
         out[CP_INIT_PARAMS_SIZE_OFFSET] = INIT_PARAMS_SIZE as u8;
         out[CP_INIT_PARAMS_OFFSET..CP_INIT_PARAMS_OFFSET + INIT_PARAMS_SIZE]
-            .copy_from_slice(&record.init_params);
+            .copy_from_slice(&record.data.init_params);
 
         // Lossless: chain-types asserts `MAX_BLOCK_SIZE <= u32::MAX`.
         let max_block_size = MAX_BLOCK_SIZE as u32;
         out[CP_MAX_BLOCK_SIZE_OFFSET..CP_MAX_BLOCK_SIZE_OFFSET + 4]
             .copy_from_slice(&max_block_size.to_le_bytes());
 
-        if let Some(chain_configuration) = &record.chain_configuration {
+        if let Some(chain_configuration) = &record.data.chain_configuration {
             let bytes = chain_configuration.serialized_bytes();
             out[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + bytes.len()]
                 .copy_from_slice(bytes);
@@ -528,7 +528,7 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 
     fn deserialize_control_record(
         bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) -> Result<ControlPlaneData, StorageError> {
+    ) -> Result<ControlRecord, StorageError> {
         let all_zero = bytes.iter().all(|v| *v == 0);
         let all_ff = bytes.iter().all(|v| *v == 0xFF);
         if all_zero || all_ff {
@@ -582,18 +582,20 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
             Some(Block::from_bytes(&cfg).map_err(|_| StorageError::ControlPlaneCorrupted)?)
         };
 
-        Ok(ControlPlaneData {
+        Ok(ControlRecord {
             private_key,
-            own_node_id,
-            init_params,
-            chain_configuration,
+            data: ControlPlaneData {
+                own_node_id,
+                init_params,
+                chain_configuration,
+            },
         })
     }
 
     fn read_control_record_from_replica(
         &self,
         replica_index: usize,
-    ) -> Result<ControlPlaneData, StorageError> {
+    ) -> Result<ControlRecord, StorageError> {
         let page_address = self.control_plane_page_address(replica_index);
         let mut page = [0u8; FLASH_PAGE_SIZE];
         self.read_page(page_address, &mut page)?;
@@ -606,7 +608,7 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     fn write_control_record_to_replica(
         &self,
         replica_index: usize,
-        record: &ControlPlaneData,
+        record: &ControlRecord,
     ) -> Result<(), StorageError> {
         let page_address = self.control_plane_page_address(replica_index);
         let mut page = [0u8; FLASH_PAGE_SIZE];
@@ -617,8 +619,8 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         self.write_page(page_address, &page)
     }
 
-    fn load_primary_control_record_and_repair(&self) -> Result<ControlPlaneData, StorageError> {
-        let mut first_valid_record: Option<ControlPlaneData> = None;
+    fn load_primary_control_record_and_repair(&self) -> Result<ControlRecord, StorageError> {
+        let mut first_valid_record: Option<ControlRecord> = None;
         let mut first_valid_index: Option<usize> = None;
         let mut invalid = [usize::MAX; CONTROL_PLANE_COUNT];
         let mut invalid_len = 0usize;
@@ -674,6 +676,25 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 
         Ok(record)
     }
+
+    /// Loads the persisted private key, for the node runtime to hand to the
+    /// crypto module (FR54). It reads the replica `load_control_data` reads,
+    /// with the same errors and the same best-effort repair. Not part of
+    /// `StorageTrait`, so the blockchain cannot call it (blockchain FR68).
+    ///
+    /// The key is stored in plaintext: CRC32 detects bit rot only, and
+    /// physical flash dumps are outside the threat model.
+    ///
+    /// Example:
+    /// ```ignore
+    /// use moonblokz_storage::backend_rp2040::Rp2040Backend;
+    ///
+    /// let mut storage = Rp2040Backend::<{ 2 * 1024 * 1024 }>::new(flash, storage_flash_offset)?;
+    /// let key = storage.load_private_key()?; // handed to the crypto module
+    /// ```
+    pub fn load_private_key(&mut self) -> Result<[u8; PRIVATE_KEY_SIZE], StorageError> {
+        Ok(self.load_primary_control_record_and_repair()?.private_key)
+    }
 }
 
 impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH_SIZE> {
@@ -692,11 +713,13 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
             self.erase_page(page_address)?;
         }
 
-        let record = ControlPlaneData {
+        let record = ControlRecord {
             private_key,
-            own_node_id,
-            init_params,
-            chain_configuration: None,
+            data: ControlPlaneData {
+                own_node_id,
+                init_params,
+                chain_configuration: None,
+            },
         };
 
         for replica_index in 0..CONTROL_PLANE_COUNT {
@@ -738,11 +761,11 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
 
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
         let mut record = self.load_primary_control_record_and_repair()?;
-        if record.chain_configuration.is_some() {
+        if record.data.chain_configuration.is_some() {
             return Err(StorageError::ChainConfigurationAlreadySet);
         }
 
-        record.chain_configuration = Some(
+        record.data.chain_configuration = Some(
             Block::from_bytes(block.serialized_bytes())
                 .map_err(|_| StorageError::BackendIo { code: 213 })?,
         );
@@ -755,8 +778,7 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
     }
 
     fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
-        let record = self.load_primary_control_record_and_repair()?;
-        Ok(record)
+        Ok(self.load_primary_control_record_and_repair()?.data)
     }
 }
 
@@ -1144,7 +1166,7 @@ mod tests {
 
         let loaded = backend.load_control_data().unwrap();
 
-        assert_eq!(loaded.private_key, private_key);
+        assert_eq!(backend.load_private_key().unwrap(), private_key);
         assert_eq!(loaded.own_node_id, 42);
         assert_eq!(loaded.init_params, init_params);
         assert!(loaded.chain_configuration.is_none());
@@ -1195,6 +1217,74 @@ mod tests {
         let repaired =
             Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::deserialize_control_record(&repaired_entry);
         assert!(repaired.is_ok());
+    }
+
+    #[test]
+    fn load_private_key_reports_uninitialized_before_init() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(matches!(
+            backend.load_private_key(),
+            Err(StorageError::ControlPlaneUninitialized)
+        ));
+    }
+
+    /// The key is not in `ControlPlaneData`, so the backend must carry it
+    /// through `set_chain_configuration`'s rewrite and a replica repair.
+    #[test]
+    fn private_key_survives_chain_configuration_and_replica_repair() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        let mut key = [0u8; PRIVATE_KEY_SIZE];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = i as u8 + 1;
+        }
+        assert!(backend.init(key, 2, [3u8; INIT_PARAMS_SIZE]).is_ok());
+        assert!(
+            backend
+                .set_chain_configuration(&block_from_marker(55))
+                .is_ok()
+        );
+
+        let replica0_addr = backend.control_plane_page_address(0);
+        backend.flash_mock.borrow_mut().data[replica0_addr] ^= 0xFF;
+
+        assert_eq!(backend.load_private_key().unwrap(), key);
+        let repaired = backend
+            .read_control_record_from_replica(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert_eq!(repaired.private_key, key);
+        assert!(repaired.data.chain_configuration.is_some());
+        let loaded = backend.load_control_data().unwrap();
+        assert_eq!(loaded.own_node_id, 2);
+        assert!(loaded.chain_configuration.is_some());
+    }
+
+    /// The persisted layout is unchanged by Story 6.9: the CRC32 of a fixed
+    /// record's replica page, captured at `4a960fd` (before the split).
+    #[test]
+    fn control_plane_layout_matches_pre_split_bytes() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        let mut key = [0u8; PRIVATE_KEY_SIZE];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = i as u8 + 1;
+        }
+        assert!(
+            backend
+                .init(key, 0x0102_0304, [9u8; INIT_PARAMS_SIZE])
+                .is_ok()
+        );
+        let mut page = [0u8; FLASH_PAGE_SIZE];
+        assert!(
+            backend
+                .read_page(backend.control_plane_page_address(0), &mut page)
+                .is_ok()
+        );
+        assert_eq!(
+            Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::crc32(&page),
+            0x719d_220a
+        );
     }
 
     #[test]

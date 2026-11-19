@@ -73,25 +73,30 @@ const _: () = assert!(moonblokz_chain_types::MAX_BLOCK_SIZE <= u32::MAX as usize
 
 /// Canonical control-plane data returned by `load_control_data`.
 ///
-/// # Security model
-///
-/// The threat model does not include physical flash dumps.
-/// Control-plane integrity is protected by CRC32 for bit-rot detection only,
-/// not for tamper-resistance. Private key bytes are stored in plaintext.
+/// It carries no private key (FR11): the node runtime reads the key with the
+/// backend's own `load_private_key`, which is not part of `StorageTrait`, so a
+/// consumer bound only by the trait never receives it (FR54; blockchain FR68).
 ///
 /// # Binary size
 ///
 /// This struct intentionally omits `Debug` and `Clone` derives to minimize
 /// binary size on embedded targets.
 pub struct ControlPlaneData {
-    /// Persisted private key (plaintext, not encrypted at rest).
-    pub private_key: [u8; PRIVATE_KEY_SIZE],
     /// Persisted own node id.
     pub own_node_id: u32,
     /// Persisted free-form init parameters.
     pub init_params: [u8; INIT_PARAMS_SIZE],
     /// Optional chain-configuration block.
     pub chain_configuration: Option<Block>,
+}
+
+/// A backend's control-plane record: `ControlPlaneData` plus the persisted
+/// key. It is the unit that is serialized, repaired and rewritten, so the key
+/// survives replica repair and `set_chain_configuration`.
+#[cfg(any(feature = "backend-memory", feature = "backend-rp2040"))]
+pub(crate) struct ControlRecord {
+    pub(crate) private_key: [u8; PRIVATE_KEY_SIZE],
+    pub(crate) data: ControlPlaneData,
 }
 
 /// Synchronous, `no_std` storage API contract for MoonBlokz chain logic.
@@ -332,6 +337,7 @@ pub trait StorageTrait {
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError>;
 
     /// Loads control-plane data and performs best-effort replica repair.
+    /// The private key is not part of it (FR11).
     ///
     /// Parameters:
     /// - none.
