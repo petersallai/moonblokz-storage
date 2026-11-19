@@ -66,6 +66,28 @@ mod tests {
     }
 
     #[test]
+    fn conformance_private_key_is_loaded_apart_from_control_data() {
+        let mut storage = new_backend();
+        assert!(matches!(
+            storage.load_private_key(),
+            Err(StorageError::ControlPlaneUninitialized)
+        ));
+
+        let key = [5u8; PRIVATE_KEY_SIZE];
+        assert!(storage.init(key, 1, [0u8; crate::INIT_PARAMS_SIZE]).is_ok());
+        assert!(
+            storage
+                .set_chain_configuration(&block_from_marker(46))
+                .is_ok()
+        );
+        assert!(matches!(storage.load_private_key(), Ok(loaded) if loaded == key));
+        assert!(matches!(
+            storage.load_control_data(),
+            Ok(data) if data.own_node_id == 1 && data.chain_configuration.is_some()
+        ));
+    }
+
+    #[test]
     fn conformance_empty_slot_reports_block_absent() {
         let mut storage = new_backend();
         assert!(
