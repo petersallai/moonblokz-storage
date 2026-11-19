@@ -111,6 +111,13 @@ persistence/retrieval, and control-plane management:
 - `set_chain_configuration(block)`
 - `load_control_data()`
 
+One call is a method of each backend struct, not of `StorageTrait`:
+
+- `load_private_key()` — returns the persisted private key for the node
+  runtime to hand to the crypto module. A consumer bound only by
+  `StorageTrait`, such as the blockchain, cannot call it, so it never receives
+  the key.
+
 Minimal index-boundary usage:
 
 ```rust
@@ -122,7 +129,6 @@ if storage_index >= capacity {
 
 `load_control_data()` returns `ControlPlaneData` with:
 
-- `private_key: [u8; PRIVATE_KEY_SIZE]`
 - `own_node_id: u32`
 - `init_params: [u8; INIT_PARAMS_SIZE]`
 - `chain_configuration: Option<Block>`

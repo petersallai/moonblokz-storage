@@ -113,7 +113,8 @@ Value proposition: MoonBlokz Storage gives constrained microcontrollers determin
 - Control-plane initialization API: `init(private_key, own_node_id, init_params)` with destructive reset semantics.
 - Indexed block persistence/retrieval with deterministic address derivation.
 - Read-time hash verification and explicit error signaling on invalid data.
-- Control-plane load API: `load_control_data()` returning private key, own node id, init parameters, and optional chain configuration block.
+- Control-plane load API: `load_control_data()` returning own node id, init parameters, and optional chain configuration block — not the private key.
+- Private-key load API: `load_private_key()`, called only by the node runtime to hand the key to the crypto module; the blockchain module never receives the key.
 - Chain configuration control-plane API: `set_chain_configuration(Block)` as set-once operation unless full re-init is executed.
 - Replicated control-plane persistence using `CONTROL_PLANE_COUNT` instances, with CRC32 validation and recovery behavior.
 - Storage layout contract where control-plane replicas are stored first at `data_storage_start_address`, and block storage capacity/addressing is computed from the remaining region.
@@ -135,7 +136,7 @@ Value proposition: MoonBlokz Storage gives constrained microcontrollers determin
 
 ### Journey 1: Primary User - Success Path (Chain Runtime)
 
-At first boot, the Chain Runtime starts in a constrained RP2040 environment where RAM cannot hold full blockchain history. Before normal operation, runtime executes `init(private_key, own_node_id, init_params)` to initialize control-plane state, clear control-plane replicas and block pages, and establish deterministic storage layout. On subsequent boots, runtime calls `load_control_data()` to load control-plane metadata (private key, node id, init params, optional chain configuration) before block reconstruction begins.
+At first boot, the Chain Runtime starts in a constrained RP2040 environment where RAM cannot hold full blockchain history. Before normal operation, runtime executes `init(private_key, own_node_id, init_params)` to initialize control-plane state, clear control-plane replicas and block pages, and establish deterministic storage layout. On subsequent boots, runtime calls `load_control_data()` to load control-plane metadata (node id, init params, optional chain configuration) before block reconstruction begins, and `load_private_key()` to hand the key to the crypto module.
 
 After control-plane load succeeds, runtime iterates indexed blocks and rebuilds in-memory chain structures needed for participation. Each retrieved block is integrity-checked (hash revalidation) before it is accepted into runtime state.
 
@@ -352,7 +353,8 @@ With a 1-engineer MVP team, scope discipline is critical. Mitigate by excluding 
 - FR8: Storage can erase (set to zero) all control-plane pages and all block-storage pages during `init()` before writing initial control-plane data.
 - FR9: Storage can enforce immutable control-plane initialization data after `init()`, except when `init()` is called again to restart from empty state.
 - FR10: Storage can persist a set-once chain configuration block via `set_chain_configuration(Block)` and return an explicit error if it was already set.
-- FR11: Storage can load all control-plane data through `load_control_data()` and return private key, own node id, init parameters, and optional chain configuration block.
+- FR11: Storage can load the control-plane data through `load_control_data()` and return own node id, init parameters, and optional chain configuration block; it does not return the private key (see FR54).
+- FR54: Storage can return the persisted private key only through a separate `load_private_key()` call. The node runtime uses it to hand the key to the crypto module; the blockchain module, which calls `load_control_data()`, never receives the key.
 - FR12: Storage can return an explicit error from `load_control_data()` when storage has not been initialized.
 - FR13: Storage can persist control-plane schema fields including version constant, persisted size fields, `max_block_size`, reserved `chain_config_block` space, and `crc32`.
 - FR14: Storage can validate persisted size fields against runtime constants from the binary and return an explicit error on mismatch.
