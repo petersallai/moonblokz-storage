@@ -355,3 +355,50 @@ pub trait StorageTrait {
     /// - none.
     fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError>;
 }
+
+/// A mutable borrow of a storage is a storage: the node runtime hands the
+/// blockchain `&mut` its backend, so the backend (with its 4 KB page buffer)
+/// lives once, in the task that owns it, instead of being moved into every
+/// async layer (Story 12.1 AC7). Every method forwards unchanged.
+impl<T: StorageTrait + ?Sized> StorageTrait for &mut T {
+    fn init(
+        &mut self,
+        private_key: [u8; PRIVATE_KEY_SIZE],
+        own_node_id: u32,
+        init_params: [u8; INIT_PARAMS_SIZE],
+    ) -> Result<(), StorageError> {
+        (**self).init(private_key, own_node_id, init_params)
+    }
+
+    fn save_block(
+        &mut self,
+        storage_index: StorageIndex,
+        block: &Block,
+    ) -> Result<(), StorageError> {
+        (**self).save_block(storage_index, block)
+    }
+
+    fn read_block_into(
+        &self,
+        storage_index: StorageIndex,
+        out: &mut [u8; MAX_BLOCK_SIZE],
+    ) -> Result<(), StorageError> {
+        (**self).read_block_into(storage_index, out)
+    }
+
+    fn read_block(&self, storage_index: StorageIndex) -> Result<Block, StorageError> {
+        (**self).read_block(storage_index)
+    }
+
+    fn capacity(&self) -> StorageIndex {
+        (**self).capacity()
+    }
+
+    fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
+        (**self).set_chain_configuration(block)
+    }
+
+    fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
+        (**self).load_control_data()
+    }
+}
