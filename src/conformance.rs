@@ -65,6 +65,40 @@ mod tests {
         assert_eq!(read_block.serialized_bytes(), block.serialized_bytes());
     }
 
+    /// Exercises every `StorageTrait` method through a `&mut` borrow, the way
+    /// the node runtime hands the backend to the blockchain (Story 12.1), and
+    /// checks the changes land in the borrowed backend itself.
+    #[test]
+    fn conformance_a_mutable_borrow_is_the_same_storage() {
+        fn as_storage<S: StorageTrait>(mut storage: S) -> S {
+            assert!(
+                storage
+                    .init([7u8; PRIVATE_KEY_SIZE], 9, [0u8; crate::INIT_PARAMS_SIZE])
+                    .is_ok()
+            );
+            assert!(storage.save_block(0, &block_from_marker(43)).is_ok());
+            assert!(
+                storage
+                    .set_chain_configuration(&block_from_marker(44))
+                    .is_ok()
+            );
+            let mut out = [0u8; MAX_BLOCK_SIZE];
+            assert!(storage.read_block_into(0, &mut out).is_ok());
+            assert_eq!(out[1], 43);
+            assert!(storage.capacity() > 0);
+            storage
+        }
+
+        let mut backend = new_backend();
+        let borrowed = as_storage(&mut backend);
+        assert!(matches!(borrowed.read_block(0), Ok(block) if block.serialized_bytes()[1] == 43));
+        assert!(matches!(
+            backend.load_control_data(),
+            Ok(data) if data.own_node_id == 9 && data.chain_configuration.is_some()
+        ));
+        assert!(matches!(backend.load_private_key(), Ok(key) if key == [7u8; PRIVATE_KEY_SIZE]));
+    }
+
     #[test]
     fn conformance_private_key_is_loaded_apart_from_control_data() {
         let mut storage = new_backend();

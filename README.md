@@ -4,8 +4,14 @@ MoonBlokz storage contract crate for embedded `no_std` environments.
 
 ## Integration and Distribution
 
-Current recommended integration model is Git dependency. Future crates.io
-release model is documented below for later phase adoption.
+Inside the MoonBlokz workspace every sibling crate links storage by path
+(`path = "../moonblokz-storage"`). Outside it, the current integration model is
+a Git dependency; the crates.io release model is documented below for later
+phase adoption.
+
+A runtime can lend its backend: `StorageTrait` is also implemented for `&mut T`
+of any storage, so the blockchain can hold a borrow while the backend lives in
+the task that owns it.
 
 ### Current: Git Dependencies
 

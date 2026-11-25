@@ -494,8 +494,10 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         !crc
     }
 
-    fn serialize_control_record(record: &ControlRecord) -> [u8; CONTROL_PLANE_ENTRY_SIZE] {
-        let mut out = [0u8; CONTROL_PLANE_ENTRY_SIZE];
+    /// Encodes `record` into `out`, which the caller zeroes first (the bytes
+    /// written are the same as ever; Story 12.1 only stopped returning a
+    /// 2 KB array by value).
+    fn serialize_control_record(record: &ControlRecord, out: &mut [u8; CONTROL_PLANE_ENTRY_SIZE]) {
         out[CP_VERSION_OFFSET] = CONTROL_PLANE_VERSION;
         // Intentional truncation: PRIVATE_KEY_SIZE is guaranteed <= 255 by the
         // control-plane schema.
@@ -523,7 +525,6 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
 
         let crc = Self::crc32(&out[..CP_CRC32_OFFSET]);
         out[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
-        out
     }
 
     fn deserialize_control_record(
@@ -575,11 +576,12 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         let chain_configuration = if bytes[CP_CHAIN_CONFIG_OFFSET] == 0 {
             None
         } else {
-            let mut cfg = [0u8; MAX_BLOCK_SIZE];
-            cfg.copy_from_slice(
-                &bytes[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE],
-            );
-            Some(Block::from_bytes(&cfg).map_err(|_| StorageError::ControlPlaneCorrupted)?)
+            Some(
+                Block::from_bytes(
+                    &bytes[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE],
+                )
+                .map_err(|_| StorageError::ControlPlaneCorrupted)?,
+            )
         };
 
         Ok(ControlRecord {
@@ -592,29 +594,37 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         })
     }
 
+    // The control-plane page goes through the backend's own `page_buffer`,
+    // never a local page: on the node these run under the blockchain task's
+    // deepest stack root, and out of line so the replica loop does not stack
+    // one frame per replica (Story 12.1 AC3 footprint).
+    #[inline(never)]
     fn read_control_record_from_replica(
         &self,
         replica_index: usize,
     ) -> Result<ControlRecord, StorageError> {
         let page_address = self.control_plane_page_address(replica_index);
-        let mut page = [0u8; FLASH_PAGE_SIZE];
+        let mut page = self.page_buffer.borrow_mut();
         self.read_page(page_address, &mut page)?;
-
-        let mut entry = [0u8; CONTROL_PLANE_ENTRY_SIZE];
-        entry.copy_from_slice(&page[..CONTROL_PLANE_ENTRY_SIZE]);
-        Self::deserialize_control_record(&entry)
+        let entry: &[u8; CONTROL_PLANE_ENTRY_SIZE] = page[..CONTROL_PLANE_ENTRY_SIZE]
+            .try_into()
+            .map_err(|_| StorageError::ControlPlaneCorrupted)?;
+        Self::deserialize_control_record(entry)
     }
 
+    #[inline(never)]
     fn write_control_record_to_replica(
         &self,
         replica_index: usize,
         record: &ControlRecord,
     ) -> Result<(), StorageError> {
         let page_address = self.control_plane_page_address(replica_index);
-        let mut page = [0u8; FLASH_PAGE_SIZE];
+        let mut page = self.page_buffer.borrow_mut();
         page.fill(0);
-        let encoded = Self::serialize_control_record(record);
-        page[..CONTROL_PLANE_ENTRY_SIZE].copy_from_slice(&encoded);
+        let entry: &mut [u8; CONTROL_PLANE_ENTRY_SIZE] = (&mut page[..CONTROL_PLANE_ENTRY_SIZE])
+            .try_into()
+            .map_err(|_| StorageError::ControlPlaneCorrupted)?;
+        Self::serialize_control_record(record, entry);
         self.erase_page(page_address)?;
         self.write_page(page_address, &page)
     }
