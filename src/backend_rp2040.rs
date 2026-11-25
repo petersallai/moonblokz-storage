@@ -527,9 +527,11 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         out[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
     }
 
-    fn deserialize_control_record(
-        bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
-    ) -> Result<ControlRecord, StorageError> {
+    /// The entry checks, in the order `deserialize_control_record` applies them,
+    /// without decoding anything: shared with the byte-level chain-config write
+    /// so both classify a replica alike (Story 12.2, DEC-299). The chain-config
+    /// block is checked through a borrowed view, with no 2 KB copy.
+    fn validate_control_entry(bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE]) -> Result<(), StorageError> {
         let all_zero = bytes.iter().all(|v| *v == 0);
         let all_ff = bytes.iter().all(|v| *v == 0xFF);
         if all_zero || all_ff {
@@ -558,6 +560,20 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
         if persisted_max_block_size != MAX_BLOCK_SIZE {
             return Err(StorageError::ControlPlaneIncompatible);
         }
+
+        if bytes[CP_CHAIN_CONFIG_OFFSET] != 0 {
+            BlockView::from_bytes(
+                &bytes[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE],
+            )
+            .map_err(|_| StorageError::ControlPlaneCorrupted)?;
+        }
+        Ok(())
+    }
+
+    fn deserialize_control_record(
+        bytes: &[u8; CONTROL_PLANE_ENTRY_SIZE],
+    ) -> Result<ControlRecord, StorageError> {
+        Self::validate_control_entry(bytes)?;
 
         let mut private_key = [0u8; PRIVATE_KEY_SIZE];
         private_key.copy_from_slice(
@@ -610,6 +626,18 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
             .try_into()
             .map_err(|_| StorageError::ControlPlaneCorrupted)?;
         Self::deserialize_control_record(entry)
+    }
+
+    /// Reads one replica into `page_buffer` and classifies its entry, with no
+    /// decode (Story 12.2, DEC-299). The borrow ends before returning.
+    #[inline(never)]
+    fn classify_control_replica(&self, replica_index: usize) -> Result<(), StorageError> {
+        let mut page = self.page_buffer.borrow_mut();
+        self.read_page(self.control_plane_page_address(replica_index), &mut page)?;
+        let entry: &[u8; CONTROL_PLANE_ENTRY_SIZE] = page[..CONTROL_PLANE_ENTRY_SIZE]
+            .try_into()
+            .map_err(|_| StorageError::ControlPlaneCorrupted)?;
+        Self::validate_control_entry(entry)
     }
 
     #[inline(never)]
@@ -769,19 +797,81 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
         self.max_storage_slots
     }
 
+    /// Works on the page bytes, with no decoded record and no block copy, so it
+    /// stays off the node's deepest stack path (Story 12.2, DEC-299). It writes
+    /// exactly the bytes the record-level path wrote: the same replica choice and
+    /// repair, the same refusals in the same order, and a page that equals
+    /// `serialize_control_record` of the updated record over a zeroed page.
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
-        let mut record = self.load_primary_control_record_and_repair()?;
-        if record.data.chain_configuration.is_some() {
-            return Err(StorageError::ChainConfigurationAlreadySet);
+        // Classify every replica first, as `load_primary_control_record_and_repair`
+        // does: one page buffer cannot hold the chosen page while the others are
+        // read.
+        let mut first_valid: Option<usize> = None;
+        let mut invalid = [false; CONTROL_PLANE_COUNT];
+        let mut saw_non_uninitialized = false;
+        let mut saw_incompatible = false;
+        for (index, is_invalid) in invalid.iter_mut().enumerate() {
+            match self.classify_control_replica(index) {
+                Ok(()) => {
+                    if first_valid.is_none() {
+                        first_valid = Some(index);
+                    }
+                }
+                Err(StorageError::ControlPlaneUninitialized) => *is_invalid = true,
+                Err(StorageError::ControlPlaneIncompatible) => {
+                    saw_non_uninitialized = true;
+                    saw_incompatible = true;
+                    *is_invalid = true;
+                }
+                Err(StorageError::ControlPlaneCorrupted) => {
+                    saw_non_uninitialized = true;
+                    *is_invalid = true;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        let Some(source) = first_valid else {
+            if saw_incompatible {
+                return Err(StorageError::ControlPlaneIncompatible);
+            }
+            if saw_non_uninitialized {
+                return Err(StorageError::ControlPlaneCorrupted);
+            }
+            return Err(StorageError::ControlPlaneUninitialized);
+        };
+
+        let mut page = self.page_buffer.borrow_mut();
+        self.read_page(self.control_plane_page_address(source), &mut page)?;
+        // The record-level path rewrote pages from a zeroed buffer: past the
+        // entry (outside the CRC) a page is zero.
+        page[CONTROL_PLANE_ENTRY_SIZE..].fill(0);
+
+        // Repair the invalid replicas with the valid page before either refusal,
+        // as the record-level load did.
+        for (index, is_invalid) in invalid.iter().enumerate() {
+            if *is_invalid {
+                let address = self.control_plane_page_address(index);
+                self.erase_page(address)?;
+                self.write_page(address, &page)?;
+            }
         }
 
-        record.data.chain_configuration = Some(
-            Block::from_bytes(block.serialized_bytes())
-                .map_err(|_| StorageError::BackendIo { code: 213 })?,
-        );
+        if page[CP_CHAIN_CONFIG_OFFSET] != 0 {
+            return Err(StorageError::ChainConfigurationAlreadySet);
+        }
+        let bytes = block.serialized_bytes();
+        BlockView::from_bytes(bytes).map_err(|_| StorageError::BackendIo { code: 213 })?;
 
-        for replica_index in 0..CONTROL_PLANE_COUNT {
-            self.write_control_record_to_replica(replica_index, &record)?;
+        let region = &mut page[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE];
+        region.fill(0);
+        region[..bytes.len()].copy_from_slice(bytes);
+        let crc = Self::crc32(&page[..CP_CRC32_OFFSET]);
+        page[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+
+        for index in 0..CONTROL_PLANE_COUNT {
+            let address = self.control_plane_page_address(index);
+            self.erase_page(address)?;
+            self.write_page(address, &page)?;
         }
 
         Ok(())
@@ -854,6 +944,71 @@ mod tests {
         match parse_result {
             Ok(value) => value,
             Err(_) => unreachable!(),
+        }
+    }
+
+    /// Story 12.2 (DEC-299): the byte-level chain-config write leaves every
+    /// replica's whole page exactly as the record-level path did, which is
+    /// `serialize_control_record` of the updated record over a zeroed page.
+    /// The test uses a short block (the region's padding must be zero), a
+    /// corrupted replica 0 (replica 1 is the source), garbage behind the
+    /// source's None region byte and garbage in the source's page tail
+    /// (outside the CRC); neither garbage may spread.
+    #[test]
+    fn chain_config_write_matches_the_record_level_pages() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(
+            backend
+                .init([7u8; PRIVATE_KEY_SIZE], 4, [9u8; INIT_PARAMS_SIZE])
+                .is_ok()
+        );
+        let replica = |index: usize| index * FLASH_PAGE_SIZE;
+        {
+            let mut flash = backend.flash_mock.borrow_mut();
+            flash.data[replica(0) + CP_OWN_NODE_ID_OFFSET] ^= 0xFF;
+            flash.data[replica(1) + CONTROL_PLANE_ENTRY_SIZE..replica(1) + FLASH_PAGE_SIZE]
+                .fill(0xA5);
+            // A None entry only reads the region's first byte: garbage behind
+            // it (under a valid CRC) must not survive the write either.
+            let region = replica(1) + CP_CHAIN_CONFIG_OFFSET;
+            flash.data[region + 1..region + MAX_BLOCK_SIZE].fill(0x5A);
+            let crc = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::crc32(
+                &flash.data[replica(1)..replica(1) + CP_CRC32_OFFSET],
+            );
+            flash.data[replica(1) + CP_CRC32_OFFSET..replica(1) + CP_CRC32_OFFSET + 4]
+                .copy_from_slice(&crc.to_le_bytes());
+        }
+        let mut bytes = [0u8; moonblokz_chain_types::HEADER_SIZE + 10];
+        bytes[0] = 1;
+        bytes[moonblokz_chain_types::HEADER_SIZE..].fill(0x3C);
+        let block = Block::from_bytes(&bytes).unwrap_or_else(|_| unreachable!());
+
+        assert!(backend.set_chain_configuration(&block).is_ok());
+
+        let record = ControlRecord {
+            private_key: [7u8; PRIVATE_KEY_SIZE],
+            data: ControlPlaneData {
+                own_node_id: 4,
+                init_params: [9u8; INIT_PARAMS_SIZE],
+                chain_configuration: Some(
+                    Block::from_bytes(block.serialized_bytes()).unwrap_or_else(|_| unreachable!()),
+                ),
+            },
+        };
+        let mut expected = [0u8; FLASH_PAGE_SIZE];
+        let entry: &mut [u8; CONTROL_PLANE_ENTRY_SIZE] = (&mut expected
+            [..CONTROL_PLANE_ENTRY_SIZE])
+            .try_into()
+            .unwrap_or_else(|_| unreachable!());
+        Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::serialize_control_record(&record, entry);
+        let flash = backend.flash_mock.borrow();
+        for index in 0..CONTROL_PLANE_COUNT {
+            assert_eq!(
+                &flash.data[replica(index)..replica(index) + FLASH_PAGE_SIZE],
+                &expected[..],
+                "replica {index}"
+            );
         }
     }
 
