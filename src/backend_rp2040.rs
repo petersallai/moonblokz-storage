@@ -658,61 +658,53 @@ impl<const RP2040_FLASH_SIZE: usize> Rp2040Backend<RP2040_FLASH_SIZE> {
     }
 
     fn load_primary_control_record_and_repair(&self) -> Result<ControlRecord, StorageError> {
-        let mut first_valid_record: Option<ControlRecord> = None;
-        let mut first_valid_index: Option<usize> = None;
-        let mut invalid = [usize::MAX; CONTROL_PLANE_COUNT];
-        let mut invalid_len = 0usize;
+        let (source, invalid) = self.classify_control_replicas()?;
+        let record = self.read_control_record_from_replica(source)?;
+        for (index, is_invalid) in invalid.iter().enumerate() {
+            if *is_invalid {
+                self.write_control_record_to_replica(index, &record)?;
+            }
+        }
+        Ok(record)
+    }
+
+    /// Classifies every control replica with the shared entry validator: the
+    /// first valid one and which are invalid, or, with none valid, the error
+    /// by priority Incompatible > Corrupted > Uninitialized. A read error on
+    /// any replica aborts.
+    fn classify_control_replicas(
+        &self,
+    ) -> Result<(usize, [bool; CONTROL_PLANE_COUNT]), StorageError> {
+        let mut first_valid: Option<usize> = None;
+        let mut invalid = [false; CONTROL_PLANE_COUNT];
         let mut saw_non_uninitialized = false;
         let mut saw_incompatible = false;
-
-        for i in 0..CONTROL_PLANE_COUNT {
-            match self.read_control_record_from_replica(i) {
-                Ok(record) => {
-                    if first_valid_record.is_none() {
-                        first_valid_index = Some(i);
-                        first_valid_record = Some(record);
+        for (index, is_invalid) in invalid.iter_mut().enumerate() {
+            match self.classify_control_replica(index) {
+                Ok(()) => {
+                    if first_valid.is_none() {
+                        first_valid = Some(index);
                     }
                 }
-                Err(StorageError::ControlPlaneUninitialized) => {
-                    invalid[invalid_len] = i;
-                    invalid_len += 1;
-                }
+                Err(StorageError::ControlPlaneUninitialized) => *is_invalid = true,
                 Err(StorageError::ControlPlaneIncompatible) => {
                     saw_non_uninitialized = true;
                     saw_incompatible = true;
-                    invalid[invalid_len] = i;
-                    invalid_len += 1;
+                    *is_invalid = true;
                 }
                 Err(StorageError::ControlPlaneCorrupted) => {
                     saw_non_uninitialized = true;
-                    invalid[invalid_len] = i;
-                    invalid_len += 1;
+                    *is_invalid = true;
                 }
                 Err(err) => return Err(err),
             }
         }
-
-        let record = match first_valid_record {
-            Some(value) => value,
-            None => {
-                if saw_incompatible {
-                    return Err(StorageError::ControlPlaneIncompatible);
-                }
-                if saw_non_uninitialized {
-                    return Err(StorageError::ControlPlaneCorrupted);
-                }
-                return Err(StorageError::ControlPlaneUninitialized);
-            }
-        };
-
-        for j in 0..invalid_len {
-            let target = invalid[j];
-            if Some(target) != first_valid_index {
-                self.write_control_record_to_replica(target, &record)?;
-            }
+        match first_valid {
+            Some(source) => Ok((source, invalid)),
+            None if saw_incompatible => Err(StorageError::ControlPlaneIncompatible),
+            None if saw_non_uninitialized => Err(StorageError::ControlPlaneCorrupted),
+            None => Err(StorageError::ControlPlaneUninitialized),
         }
-
-        Ok(record)
     }
 
     /// Loads the persisted private key, for the node runtime to hand to the
@@ -803,60 +795,44 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
     /// repair, the same refusals in the same order, and a page that equals
     /// `serialize_control_record` of the updated record over a zeroed page.
     fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
-        // Classify every replica first, as `load_primary_control_record_and_repair`
-        // does: one page buffer cannot hold the chosen page while the others are
-        // read.
-        let mut first_valid: Option<usize> = None;
-        let mut invalid = [false; CONTROL_PLANE_COUNT];
-        let mut saw_non_uninitialized = false;
-        let mut saw_incompatible = false;
-        for (index, is_invalid) in invalid.iter_mut().enumerate() {
-            match self.classify_control_replica(index) {
-                Ok(()) => {
-                    if first_valid.is_none() {
-                        first_valid = Some(index);
-                    }
-                }
-                Err(StorageError::ControlPlaneUninitialized) => *is_invalid = true,
-                Err(StorageError::ControlPlaneIncompatible) => {
-                    saw_non_uninitialized = true;
-                    saw_incompatible = true;
-                    *is_invalid = true;
-                }
-                Err(StorageError::ControlPlaneCorrupted) => {
-                    saw_non_uninitialized = true;
-                    *is_invalid = true;
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        let Some(source) = first_valid else {
-            if saw_incompatible {
-                return Err(StorageError::ControlPlaneIncompatible);
-            }
-            if saw_non_uninitialized {
-                return Err(StorageError::ControlPlaneCorrupted);
-            }
-            return Err(StorageError::ControlPlaneUninitialized);
-        };
+        let (source, invalid) = self.classify_control_replicas()?;
 
         let mut page = self.page_buffer.borrow_mut();
         self.read_page(self.control_plane_page_address(source), &mut page)?;
+        // The classification validated an earlier read of this page; this one
+        // is validated too, so nothing unchecked is sealed under a fresh CRC.
+        let entry: &[u8; CONTROL_PLANE_ENTRY_SIZE] = page[..CONTROL_PLANE_ENTRY_SIZE]
+            .try_into()
+            .map_err(|_| StorageError::ControlPlaneCorrupted)?;
+        Self::validate_control_entry(entry)?;
         // The record-level path rewrote pages from a zeroed buffer: past the
         // entry (outside the CRC) a page is zero.
         page[CONTROL_PLANE_ENTRY_SIZE..].fill(0);
 
-        // A refusal still repairs the invalid replicas with the valid page, as
-        // the record-level load did before either check. On success the write
-        // below covers them, so each replica is written once.
         let bytes = block.serialized_bytes();
-        let refusal = if page[CP_CHAIN_CONFIG_OFFSET] != 0 {
+        let already_set = page[CP_CHAIN_CONFIG_OFFSET] != 0;
+        let refusal = if already_set {
             Some(StorageError::ChainConfigurationAlreadySet)
         } else if BlockView::from_bytes(bytes).is_err() {
             Some(StorageError::BackendIo { code: 213 })
         } else {
             None
         };
+        if !already_set {
+            // A `None` region is all zero in the record-level bytes, whatever
+            // stood behind its first byte; the block, if accepted, goes there.
+            let region = &mut page[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE];
+            region.fill(0);
+            if refusal.is_none() {
+                region[..bytes.len()].copy_from_slice(bytes);
+            }
+            let crc = Self::crc32(&page[..CP_CRC32_OFFSET]);
+            page[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+        }
+
+        // A refusal still repairs the invalid replicas with the valid page, as
+        // the record-level load did before either check. On success the write
+        // below covers them, so each replica is written once.
         if let Some(refusal) = refusal {
             for (index, is_invalid) in invalid.iter().enumerate() {
                 if *is_invalid {
@@ -867,12 +843,6 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
             }
             return Err(refusal);
         }
-
-        let region = &mut page[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE];
-        region.fill(0);
-        region[..bytes.len()].copy_from_slice(bytes);
-        let crc = Self::crc32(&page[..CP_CRC32_OFFSET]);
-        page[CP_CRC32_OFFSET..CP_CRC32_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
 
         for index in 0..CONTROL_PLANE_COUNT {
             let address = self.control_plane_page_address(index);
@@ -891,12 +861,20 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
 #[cfg(any(test, not(target_arch = "arm")))]
 struct MockFlash<const SIZE: usize> {
     data: [u8; SIZE],
+    /// Test seam: `(reads to let pass, byte offset)` — the next read after
+    /// that many flips that byte of what it returns, once (a disturbed read).
+    #[cfg(test)]
+    flip_read: core::cell::Cell<Option<(usize, usize)>>,
 }
 
 #[cfg(any(test, not(target_arch = "arm")))]
 impl<const SIZE: usize> MockFlash<SIZE> {
     fn new() -> Self {
-        Self { data: [0xFF; SIZE] }
+        Self {
+            data: [0xFF; SIZE],
+            #[cfg(test)]
+            flip_read: core::cell::Cell::new(None),
+        }
     }
 
     fn read(&self, from: u32, out: &mut [u8]) -> Result<(), u16> {
@@ -906,6 +884,15 @@ impl<const SIZE: usize> MockFlash<SIZE> {
             return Err(230);
         }
         out.copy_from_slice(&self.data[from_index..to_index]);
+        #[cfg(test)]
+        if let Some((pass, at)) = self.flip_read.get() {
+            if pass == 0 {
+                self.flip_read.set(None);
+                out[at] ^= 0xFF;
+            } else {
+                self.flip_read.set(Some((pass - 1, at)));
+            }
+        }
         Ok(())
     }
 
@@ -1364,6 +1351,35 @@ mod tests {
         assert!(loaded.chain_configuration.is_some());
     }
 
+    /// Review 12.2: the source page is read again after the classification;
+    /// a second read that differs is refused, not sealed under a fresh CRC
+    /// and written to every replica.
+    #[test]
+    fn chain_config_write_refuses_a_disturbed_reread() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(
+            backend
+                .init([1u8; PRIVATE_KEY_SIZE], 1, [2u8; INIT_PARAMS_SIZE])
+                .is_ok()
+        );
+        let control = CONTROL_PLANE_COUNT * FLASH_PAGE_SIZE;
+        let mut before = [0u8; CONTROL_PLANE_COUNT * FLASH_PAGE_SIZE];
+        before.copy_from_slice(&backend.flash_mock.borrow().data[..control]);
+        // The classification reads every replica; the next read is the re-read.
+        backend
+            .flash_mock
+            .borrow()
+            .flip_read
+            .set(Some((CONTROL_PLANE_COUNT, CP_OWN_NODE_ID_OFFSET)));
+
+        assert!(matches!(
+            backend.set_chain_configuration(&block_from_marker(57)),
+            Err(StorageError::ControlPlaneCorrupted)
+        ));
+        assert_eq!(&backend.flash_mock.borrow().data[..control], &before[..]);
+    }
+
     /// Story 12.2: a refused chain-config write still repairs the invalid
     /// replicas with the valid page (tail zeroed), as the record-level load
     /// did before the AlreadySet check.
@@ -1389,12 +1405,28 @@ mod tests {
                 .fill(0xA5);
         }
 
+        let mut valid_before = [[0u8; FLASH_PAGE_SIZE]; 2];
+        {
+            let flash = backend.flash_mock.borrow();
+            for (page, index) in valid_before.iter_mut().zip(1..) {
+                page.copy_from_slice(&flash.data[replica(index)..replica(index) + FLASH_PAGE_SIZE]);
+            }
+        }
+
         assert!(matches!(
             backend.set_chain_configuration(&block_from_marker(56)),
             Err(StorageError::ChainConfigurationAlreadySet)
         ));
 
         let flash = backend.flash_mock.borrow();
+        // The valid replicas are left as they were, tail garbage included.
+        for (page, index) in valid_before.iter().zip(1..) {
+            assert_eq!(
+                &flash.data[replica(index)..replica(index) + FLASH_PAGE_SIZE],
+                &page[..],
+                "replica {index}"
+            );
+        }
         let mut expected = [0u8; FLASH_PAGE_SIZE];
         expected[..CONTROL_PLANE_ENTRY_SIZE]
             .copy_from_slice(&flash.data[replica(1)..replica(1) + CONTROL_PLANE_ENTRY_SIZE]);
