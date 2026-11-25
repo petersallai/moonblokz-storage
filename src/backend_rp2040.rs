@@ -846,21 +846,27 @@ impl<const RP2040_FLASH_SIZE: usize> StorageTrait for Rp2040Backend<RP2040_FLASH
         // entry (outside the CRC) a page is zero.
         page[CONTROL_PLANE_ENTRY_SIZE..].fill(0);
 
-        // Repair the invalid replicas with the valid page before either refusal,
-        // as the record-level load did.
-        for (index, is_invalid) in invalid.iter().enumerate() {
-            if *is_invalid {
-                let address = self.control_plane_page_address(index);
-                self.erase_page(address)?;
-                self.write_page(address, &page)?;
-            }
-        }
-
-        if page[CP_CHAIN_CONFIG_OFFSET] != 0 {
-            return Err(StorageError::ChainConfigurationAlreadySet);
-        }
+        // A refusal still repairs the invalid replicas with the valid page, as
+        // the record-level load did before either check. On success the write
+        // below covers them, so each replica is written once.
         let bytes = block.serialized_bytes();
-        BlockView::from_bytes(bytes).map_err(|_| StorageError::BackendIo { code: 213 })?;
+        let refusal = if page[CP_CHAIN_CONFIG_OFFSET] != 0 {
+            Some(StorageError::ChainConfigurationAlreadySet)
+        } else if BlockView::from_bytes(bytes).is_err() {
+            Some(StorageError::BackendIo { code: 213 })
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            for (index, is_invalid) in invalid.iter().enumerate() {
+                if *is_invalid {
+                    let address = self.control_plane_page_address(index);
+                    self.erase_page(address)?;
+                    self.write_page(address, &page)?;
+                }
+            }
+            return Err(refusal);
+        }
 
         let region = &mut page[CP_CHAIN_CONFIG_OFFSET..CP_CHAIN_CONFIG_OFFSET + MAX_BLOCK_SIZE];
         region.fill(0);
@@ -1356,6 +1362,46 @@ mod tests {
 
         let loaded = backend.load_control_data().unwrap();
         assert!(loaded.chain_configuration.is_some());
+    }
+
+    /// Story 12.2: a refused chain-config write still repairs the invalid
+    /// replicas with the valid page (tail zeroed), as the record-level load
+    /// did before the AlreadySet check.
+    #[test]
+    fn chain_config_already_set_still_repairs_invalid_replicas() {
+        let mut backend = Rp2040Backend::<TEST_FLASH_ONE_BLOCK_PAGE>::new_for_tests(0)
+            .unwrap_or_else(|_| unreachable!());
+        assert!(
+            backend
+                .init([1u8; PRIVATE_KEY_SIZE], 1, [2u8; INIT_PARAMS_SIZE])
+                .is_ok()
+        );
+        assert!(
+            backend
+                .set_chain_configuration(&block_from_marker(55))
+                .is_ok()
+        );
+        let replica = |index: usize| index * FLASH_PAGE_SIZE;
+        {
+            let mut flash = backend.flash_mock.borrow_mut();
+            flash.data[replica(0) + CP_OWN_NODE_ID_OFFSET] ^= 0xFF;
+            flash.data[replica(1) + CONTROL_PLANE_ENTRY_SIZE..replica(1) + FLASH_PAGE_SIZE]
+                .fill(0xA5);
+        }
+
+        assert!(matches!(
+            backend.set_chain_configuration(&block_from_marker(56)),
+            Err(StorageError::ChainConfigurationAlreadySet)
+        ));
+
+        let flash = backend.flash_mock.borrow();
+        let mut expected = [0u8; FLASH_PAGE_SIZE];
+        expected[..CONTROL_PLANE_ENTRY_SIZE]
+            .copy_from_slice(&flash.data[replica(1)..replica(1) + CONTROL_PLANE_ENTRY_SIZE]);
+        assert_eq!(
+            &flash.data[replica(0)..replica(0) + FLASH_PAGE_SIZE],
+            &expected[..]
+        );
     }
 
     #[test]
